@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# Moteur d'analyse (obligatoire)
+# ---------------------------------------------------------------------------
+pandas>=2.0            # manipulation des séries OHLCV et tableaux de résultats
+numpy>=1.24            # calculs vectorisés des indicateurs
+requests>=2.28         # appels API CoinGecko, Binance et webhooks Discord
+
+# ---------------------------------------------------------------------------
+# Sources de prix
+# ---------------------------------------------------------------------------
+# Binance passe par requests (rien à installer), mais il ne cote pas les jetons
+# des plateformes concurrentes : CRO, MNT, OKB, LEO, BGB... yfinance sert de
+# repli pour ceux-là. Sans lui, ces cryptos apparaissent en « Historique
+# indisponible » — l'analyse des autres continue normalement.
+yfinance>=0.2
+
+# ---------------------------------------------------------------------------
+# Suivi des performances
+# ---------------------------------------------------------------------------
+openpyxl>=3.1          # lecture / écriture du classeur suivi_scores.xlsx
+
+# ---------------------------------------------------------------------------
+# Interfaces
+# ---------------------------------------------------------------------------
+customtkinter>=5.2     # interface de bureau  -> python interface_bureau.py
+streamlit>=1.30        # interface web        -> python -m streamlit run interface_web.py
+jinja2>=3.0            # rendu HTML des tableaux web (via pandas Styler)

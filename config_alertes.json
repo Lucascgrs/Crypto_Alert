@@ -1,0 +1,15 @@
+{
+  "webhook": "https://discord.com/api/webhooks/1541482897587044383/uwZSTyQdpzCiFlRXvWUClNosah-zDWzX3DH1i9WFxDsQHaXe1_QwpEBn5K4sKN5dW32b",
+  "actif": true,
+  "auto": true,
+  "intervalle": 5.0,
+  "unite": "minutes",
+  "nb_cryptos": 3,
+  "score_min": 0.35,
+  "sens": "tous",
+  "inclure_categories": true,
+  "inclure_criteres": true,
+  "nb_criteres": 10,
+  "mention": "",
+  "silencieux_si_vide": true
+}

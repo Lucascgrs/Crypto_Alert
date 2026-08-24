@@ -1,0 +1,11 @@
+cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Journal de suivi (donnees locales, regenerables)
+suivi_scores.xlsx
+
+# Secrets
+config_alertes.json   # contient l'URL du webhook Discord
