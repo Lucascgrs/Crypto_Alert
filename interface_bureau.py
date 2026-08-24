@@ -26,7 +26,7 @@ import notifications as notif
 import presentation as pr
 import suivi
 from fenetre_alertes import FenetreAlertes
-from fenetre_suivi import FenetreSuivi
+from fenetre_suivi import FenetreSuivi, planifier
 from indicateurs import CODES_PAR_DEFAUT, Categorie, catalogue, codes_par_categorie
 from moteur import AnalyseurMarche
 
@@ -288,7 +288,7 @@ class ApplicationBureau(ctk.CTk):
             resultats, erreur = [], f"{type(e).__name__} : {e}"
 
         # Retour dans le thread graphique, seul autorisé à modifier l'affichage.
-        self.after(0, self._analyse_terminee, resultats, erreur, historiques, suivi_message)
+        planifier(self, self._analyse_terminee, resultats, erreur, historiques, suivi_message)
 
     def _analyse_terminee(self, resultats, erreur, historiques=None, suivi_message=""):
         self.analyse_en_cours = False
@@ -539,7 +539,7 @@ class ApplicationBureau(ctk.CTk):
         return etat + f", {bilan['en_attente']} en attente."
 
     def _ouvrir_suivi(self):
-        """Fenêtre récapitulative des performances mesurées."""
+        """Fenêtre d'évolution des scores et de simulation."""
         if self._fenetre_suivi is not None and self._fenetre_suivi.winfo_exists():
             self._fenetre_suivi.focus()
             return
@@ -597,7 +597,7 @@ class ApplicationBureau(ctk.CTk):
         def travail():
             ok, detail = notif.envoyer_alerte(self.resultats, config, intervalle)
             prefixe = "Envoi automatique — " if automatique else ""
-            self.after(0, self._envoi_termine, prefixe + detail, ok, retour)
+            planifier(self, self._envoi_termine, prefixe + detail, ok, retour)
 
         threading.Thread(target=travail, daemon=True).start()
 

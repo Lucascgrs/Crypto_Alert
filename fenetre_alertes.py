@@ -20,6 +20,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 import notifications as notif
+from fenetre_suivi import planifier
 
 POLICE_TITRE = ("Segoe UI", 15, "bold")
 POLICE_NORMALE = ("Segoe UI", 12)
@@ -302,7 +303,7 @@ class FenetreAlertes(ctk.CTkToplevel):
 
         def travail():
             succes, detail = notif.tester_webhook(webhook)
-            self.after(0, self._etat, detail, succes)
+            planifier(self, self._etat, detail, succes)
 
         threading.Thread(target=travail, daemon=True).start()
 

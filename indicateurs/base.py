@@ -61,6 +61,14 @@ class Signal(Enum):
         }[self]
 
 
+# Profondeur passée réellement consultée par les méthodes `interpreter`.
+# La plus gourmande est la détection de divergence (40 barres) ; le décalage
+# Ichimoku en demande 27. 150 laisse une marge confortable tout en gardant le
+# coût d'une interprétation constant, quelle que soit la longueur de la série.
+# Le test `t_causal` vérifie que cette borne ne change aucun résultat.
+FENETRE_INTERPRETATION = 150
+
+
 class Categorie(Enum):
     """Famille d'indicateurs : sert à regrouper le tableau de bord."""
 
@@ -292,6 +300,53 @@ class Indicateur(ABC):
             return ResultatIndicateur(**entete, criteres=self.interpreter(df, calc))
         except Exception as e:  # on veut vraiment tout attraper ici
             return ResultatIndicateur(**entete, erreur=f"{type(e).__name__}: {e}")
+
+    def analyser_serie(self, df: pd.DataFrame, positions) -> dict:
+        """
+        Interprète l'indicateur à plusieurs instants du passé, en ne calculant
+        qu'une seule fois. Renvoie {position: ResultatIndicateur}.
+
+        Repose sur une propriété essentielle : tous les calculs d'indicateurs de
+        ce projet sont CAUSAUX — moyennes glissantes, moyennes exponentielles,
+        décalages vers le passé, boucles Supertrend et SAR. La valeur en ligne t
+        est donc identique qu'elle ait été calculée sur la série complète ou sur
+        la série tronquée à t. On calcule une fois sur toute la série, puis on
+        interprète chaque position en tronquant : aucune information future ne
+        peut remonter dans le passé.
+
+        C'est ce qui rend la simulation praticable : recalculer les 20
+        indicateurs à chacune des centaines de barres serait des ordres de
+        grandeur plus lent.
+        """
+        entete = dict(code=self.code, nom=self.nom, categorie=self.categorie)
+        try:
+            calc = self.calculer(df)
+        except Exception as e:
+            echec = ResultatIndicateur(**entete, erreur=f"{type(e).__name__}: {e}")
+            return {position: echec for position in positions}
+
+        resultats = {}
+        for position in positions:
+            if position + 1 < self.periodes_min:
+                resultats[position] = ResultatIndicateur(
+                    **entete, erreur=f"Historique insuffisant ({position + 1} bougies)"
+                )
+                continue
+            # Les interprètes ne regardent que quelques dizaines de barres en
+            # arrière (croisements récents, divergences, pentes). Leur passer
+            # tout le passé les ferait travailler en O(n) pour lire une seule
+            # valeur ; on borne donc la fenêtre (cf. FENETRE_INTERPRETATION).
+            debut = max(0, position + 1 - FENETRE_INTERPRETATION)
+            try:
+                criteres = self.interpreter(
+                    df.iloc[debut : position + 1], calc.iloc[debut : position + 1]
+                )
+                resultats[position] = ResultatIndicateur(**entete, criteres=criteres)
+            except Exception as e:
+                resultats[position] = ResultatIndicateur(
+                    **entete, erreur=f"{type(e).__name__}: {e}"
+                )
+        return resultats
 
     def fiche(self) -> dict:
         """Descriptif de l'indicateur (alimente la liste sélectionnable de l'UI)."""

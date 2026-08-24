@@ -17,6 +17,7 @@ import streamlit as st
 import graphiques
 import notifications as notif
 import presentation as pr
+import simulation as mod_simulation
 import suivi
 from indicateurs import CODES_PAR_DEFAUT, Categorie, catalogue, codes_par_categorie
 from moteur import AnalyseurMarche
@@ -308,54 +309,6 @@ def journaliser(resultats, analyseur, intervalle: str, codes: list[str]):
         )
 
 
-def onglet_suivi():
-    """Tableau des performances mesurées, tel qu'il figure dans le classeur."""
-    journal = st.session_state.get("journal") or suivi.JournalSuivi()
-    st.caption(journal.resume())
-
-    performance = journal.performance()
-    if performance.empty:
-        st.info(
-            "Aucune vérification pour l'instant. Les relevés sont confrontés au marché "
-            "lorsque leur échéance est atteinte, quelques bougies après l'analyse qui "
-            "les a produits — relancez une analyse après ce délai."
-        )
-        return
-
-    st.caption(
-        "Le taux de réussite ne compte que les cas tranchés : un score neutre "
-        "(« Non prédictif ») ou un marché immobile (« Indécis ») n'est ni une réussite "
-        "ni un échec. Le rendement relatif compare chaque crypto à la moyenne de son "
-        "lot d'analyse : c'est lui qui dit si le score apporte vraiment quelque chose."
-    )
-
-    def colorer_taux(valeur):
-        if valeur is None or valeur != valeur:
-            return ""
-        # Un taux se juge par rapport à 50 % (le pile ou face), pas par rapport à 0.
-        couleur = "#157f3d" if valeur >= 60 else (
-            "#2e8b57" if valeur >= 52 else (
-                "#6b7280" if valeur >= 48 else "#d1495b"))
-        return f"background-color: {couleur}; color: white;"
-
-    for regroupement in ["Global", "Tranche de score", "Intervalle", "Crypto"]:
-        sous = performance[performance["Regroupement"] == regroupement]
-        if sous.empty:
-            continue
-        st.markdown(f"**{regroupement}**")
-        style = (
-            sous.drop(columns=["Regroupement"]).style
-            .hide(axis="index")
-            .map(colorer_taux, subset=["Taux de réussite %"])
-            .format({
-                "Taux de réussite %": lambda v: "—" if v != v else f"{v:.1f} %",
-                "Rendement moyen %": "{:+.2f} %",
-                "Rendement relatif moyen %": lambda v: "—" if v != v else f"{v:+.2f} %",
-            })
-        )
-        afficher_tableau_html(style)
-
-
 def onglet_evolution():
     """
     Trajectoire des scores dans le temps : on choisit les cryptos, le type de
@@ -421,6 +374,165 @@ def onglet_evolution():
         )
 
 
+def onglet_simulation():
+    """
+    Rejoue la stratégie sur le passé : les scores sont recalculés à chaque barre
+    avec les seules données disponibles à cet instant, et les allers-retours
+    qu'ils auraient déclenchés sont simulés.
+    """
+    st.caption(
+        "Les scores sont recalculés à chaque barre du passé avec les seules données "
+        "disponibles à cet instant : aucune information future n'entre dans le résultat. "
+        "Aucune position ne se chevauche : tant qu'une est ouverte, les signaux suivants "
+        "sont ignorés."
+    )
+
+    with st.form("simulation"):
+        ligne = st.columns(4)
+        mise = ligne[0].number_input("Mise par crypto ($)", 10.0, 1_000_000.0, 1000.0, step=100.0)
+        libelle = ligne[1].selectbox("Intervalle", list(pr.INTERVALLES))
+        periodes = ligne[2].number_input("Périodes simulées", 20, 800, 150, step=10)
+        frais = ligne[3].number_input(
+            "Frais par transaction (%)", 0.0, 5.0, 0.10, step=0.05,
+            help="Comptés à l'entrée et à la sortie. Sans eux, une stratégie qui "
+                 "multiplie les allers-retours paraît toujours rentable.",
+        )
+
+        st.markdown("**Signal d'entrée**")
+        ligne = st.columns(3)
+        type_score = ligne[0].selectbox("Score utilisé", mod_simulation.TYPES_SCORE)
+        sens = ligne[1].selectbox("Sens autorisés", mod_simulation.SENS_POSSIBLES)
+        seuils = ligne[2].slider(
+            "Seuils sur |score|", 0.0, 1.0, (0.30, 1.0), step=0.05,
+            help="Une position ne s'ouvre que si la valeur absolue du score tombe "
+                 "dans cette plage.",
+        )
+
+        st.markdown("**Sortie** — la position se referme au premier motif rempli ; "
+                    "0 désactive une condition.")
+        ligne = st.columns(4)
+        duree = ligne[0].number_input(
+            "Détention maximale (bougies)", 1, 100, 6,
+            help="Ce qui n'a pas été coupé avant se referme après ce nombre de bougies.",
+        )
+        retournement = ligne[1].number_input(
+            "Retournement du score (points)", 0.0, 2.0, 0.0, step=0.05,
+            help="Coupe la position si le score choisi se retourne d'autant de points "
+                 "contre elle, par rapport à sa valeur d'entrée. Vérifié à chaque "
+                 "bougie. Le score vivant dans [-1, +1], 0,30 est déjà un franc "
+                 "changement d'avis.",
+        )
+        objectif = ligne[2].number_input(
+            "Objectif de gain (%)", 0.0, 100.0, 0.0, step=0.5,
+            help="Prise de bénéfice : la position se referme dès que le prix atteint "
+                 "ce gain, même en cours de bougie.",
+        )
+        stop = ligne[3].number_input(
+            "Stop de perte (%)", 0.0, 100.0, 0.0, step=0.5,
+            help="Coupe la position dès que la perte atteint ce pourcentage. Si la "
+                 "bougie ouvre déjà au-delà, la sortie se fait à l'ouverture.",
+        )
+
+        connues = (st.session_state.get("journal") or suivi.JournalSuivi()).symboles_suivis()
+        defaut = connues[:3] if connues else []
+        symboles = st.multiselect(
+            "Cryptos", connues or [], default=defaut,
+            help="La liste reprend les cryptos déjà analysées. Lancez une analyse "
+                 "pour en ajouter.",
+        )
+        lancer = st.form_submit_button("Lancer la simulation", type="primary")
+
+    if not lancer:
+        return
+    if not symboles:
+        st.warning("Choisissez au moins une crypto.")
+        return
+
+    parametres = mod_simulation.ParametresSimulation(
+        mise=float(mise), intervalle=pr.INTERVALLES[libelle], periodes=int(periodes),
+        duree_position=int(duree), symboles=symboles, type_score=type_score,
+        seuil_min=seuils[0], seuil_max=seuils[1], sens=sens, frais_pct=float(frais),
+        # 0 vaut « condition désactivée ».
+        retournement=float(retournement) or None,
+        objectif_pct=float(objectif) or None,
+        stop_pct=float(stop) or None,
+    )
+
+    with st.spinner(f"Simulation sur {len(symboles)} crypto(s)..."):
+        try:
+            resultats = mod_simulation.Simulateur(verbeux=False).simuler(parametres)
+        except Exception as e:
+            st.error(f"Échec de la simulation : {type(e).__name__} — {e}")
+            return
+
+    st.success(mod_simulation.resume(resultats, parametres))
+    st.caption(
+        f"Sortie : {parametres.description_sorties()}. "
+        "« Marché » est le rendement d'un simple achat-conservation sur la même "
+        "période : c'est lui qu'il faut battre. « Écart » mesure ce que la stratégie "
+        "a réellement apporté."
+    )
+
+    table = mod_simulation.Simulateur.tableau(resultats)
+    style = (
+        table.drop(columns=["Détail"]).style
+        .hide(axis="index")
+        .map(
+            lambda v: "" if v is None or v != v else (
+                f"background-color: {pr.COULEURS_SIGNAL[pr.Signal.POSITIF if v >= 0 else pr.Signal.NEGATIF]};"
+                " color: white;"
+            ),
+            subset=["Gain %", "Écart %"],
+        )
+        .format({
+            "Réussite %": lambda v: "—" if v != v else f"{v:.1f} %",
+            "Capital final": lambda v: "—" if v != v else f"{v:,.2f}",
+            "Gain": lambda v: "—" if v != v else f"{v:+,.2f}",
+            "Gain %": lambda v: "—" if v != v else f"{v:+.2f}",
+            "Marché %": lambda v: "—" if v != v else f"{v:+.2f}",
+            "Écart %": lambda v: "—" if v != v else f"{v:+.2f}",
+        })
+    )
+    afficher_tableau_html(style)
+
+    for resultat in resultats:
+        if resultat.erreur:
+            st.warning(f"{resultat.symbole} : {resultat.erreur}")
+
+    # Par quoi les positions se sont refermées : deux stratégies de même capital
+    # final ne valent pas la même chose si l'une ne gagne que par son stop.
+    repartition = mod_simulation.Simulateur.repartition_sorties(resultats)
+    if len(repartition) > 1:
+        st.caption("Sorties : " + " · ".join(
+            f"{nombre} par {motif.lower()}" for motif, nombre in repartition.items()
+        ))
+
+    courbes = mod_simulation.Simulateur.courbes(resultats)
+    if not courbes.empty:
+        mode = "clair" if st.get_option("theme.base") == "light" else "sombre"
+        couleurs = st.session_state.get("couleurs") or pr.AttributionCouleurs(mode)
+        st.pyplot(
+            graphiques.figure_capital(courbes, couleurs, mode=mode), width="stretch"
+        )
+
+    trades = mod_simulation.Simulateur.tableau_trades(resultats)
+    if not trades.empty:
+        with st.expander(f"Détail des {len(trades)} allers-retours"):
+            apercu = trades[["Crypto", "Sens", "Score", "Entrée", "Sortie", "Motif",
+                             "Rendement net %", "Capital après"]].head(40).copy()
+            apercu["Entrée"] = apercu["Entrée"].dt.strftime("%d/%m/%y %H:%M")
+            apercu["Sortie"] = apercu["Sortie"].dt.strftime("%d/%m/%y %H:%M")
+            afficher_tableau_html(
+                apercu.style.hide(axis="index").map(
+                    lambda v: (
+                        f"color: {pr.COULEURS_SIGNAL[pr.Signal.POSITIF if v >= 0 else pr.Signal.NEGATIF]};"
+                    ),
+                    subset=["Rendement net %"],
+                ).format({"Rendement net %": "{:+.2f} %", "Score": "{:+.2f}",
+                          "Capital après": "{:,.2f}"})
+            )
+
+
 # ===========================================================================
 # PAGE
 # ===========================================================================
@@ -468,9 +580,10 @@ def main():
         sum(len(i.criteres) for r in resultats for i in r.resultats.values()),
     )
 
-    onglet_synthese, onglet_classement, onglet_detail, onglet_perf, onglet_evo = st.tabs(
+    (onglet_synthese, onglet_classement, onglet_detail,
+     onglet_evo, onglet_simu) = st.tabs(
         ["Synthèse par indicateur", "Classement", "Détail par crypto",
-         "Suivi des performances", "Évolution des scores"]
+         "Évolution des scores", "Simulation"]
     )
 
     with onglet_synthese:
@@ -492,11 +605,11 @@ def main():
             )
             detail_crypto(next(r for r in exploitables if r.symbole == symbole))
 
-    with onglet_perf:
-        onglet_suivi()
-
     with onglet_evo:
         onglet_evolution()
+
+    with onglet_simu:
+        onglet_simulation()
 
 
 if __name__ == "__main__":

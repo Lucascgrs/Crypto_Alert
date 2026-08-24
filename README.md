@@ -66,8 +66,8 @@ noté sur moins d'indicateurs et son score n'a pas la solidité de celui du BTC.
 python -m streamlit run interface_web.py
 ```
 
-Réglages en barre latérale, puis trois onglets : synthèse par indicateur,
-classement, détail par crypto.
+Réglages en barre latérale, puis cinq onglets : synthèse par indicateur,
+classement, détail par crypto, évolution des scores et simulation.
 
 > Les tableaux web sont rendus en HTML (`Styler.to_html`) plutôt qu'avec
 > `st.dataframe`, qui dépend de **pyarrow**. Sur certains postes Windows, la DLL
@@ -120,10 +120,11 @@ CryptoDashboard/
 ├── presentation.py      Couleurs, libellés et formats partagés par les 2 interfaces
 ├── notifications.py     Alertes Discord : webhook, message, réglages
 ├── suivi.py             Suivi des performances : journal Excel et vérification
-├── graphiques.py        Courbes d'évolution des scores (partagées par les 2 interfaces)
+├── simulation.py        Simulation historique : rejoue la stratégie sur le passé
+├── graphiques.py        Courbes d'évolution et de capital (partagées par les 2 interfaces)
 ├── interface_bureau.py  Tableau de bord customtkinter
 ├── fenetre_alertes.py   Fenêtre de configuration des alertes Discord
-├── fenetre_suivi.py     Fenêtre de suivi : performances + évolution des scores
+├── fenetre_suivi.py     Fenêtre de suivi : évolution des scores et simulation
 ├── interface_web.py     Tableau de bord Streamlit
 ├── main.py              Démonstration en ligne de commande
 └── indicateurs/
@@ -426,7 +427,7 @@ OHLCV, pas dans le prix du moment : la vérification est donc exacte, même
 effectuée longtemps après coup. La colonne `precision_prix` indique `exacte`,
 `approchée` (bougie manquante) ou, à défaut, le relevé est marqué `Expiré`.
 
-### Les trois onglets du classeur
+### Les quatre feuilles du classeur
 
 **`Relevés`** — le journal brut, une ligne par crypto et par analyse : horodatage,
 échéance, prix, score global, les quatre scores de famille, la couverture en
@@ -472,9 +473,11 @@ Deux lectures comptent vraiment :
 
 ### Consultation
 
-Bouton **📈 Suivi** dans l'interface de bureau (avec un bouton pour ouvrir le
-classeur dans Excel), onglet **Suivi des performances** dans l'interface web, ou
-affichage direct en fin d'exécution de `python main.py`.
+Le bilan des vérifications n'a **pas d'onglet dédié** dans les interfaces : il
+vit dans le classeur, que le bouton **Ouvrir le classeur** de la fenêtre
+📈 Suivi atteint directement. `python main.py` l'affiche aussi en fin
+d'exécution. La simulation répond à la même question de façon plus directe, en
+rejouant la stratégie sur le passé au lieu d'attendre que le temps passe.
 
 ### Évolution des scores
 
@@ -510,7 +513,128 @@ simultanés d'une même crypto se marcheraient dessus.
   échelle qui s'ajusterait ferait paraître spectaculaire une variation de 0,02.
 - **La bande grise est la zone neutre.** Entre -0,15 et +0,15, l'application
   n'annonce aucune direction — c'est le seuil qui produit les « Non prédictif »
-  de l'onglet Performance.
+  de la feuille `Performance` du classeur.
+
+### Simulation historique
+
+Le suivi enregistre les scores et attend que le temps passe. La **simulation**
+fait l'inverse : elle remonte le temps, recalcule les scores à chaque barre du
+passé et rejoue les allers-retours qu'ils auraient déclenchés. Onglet
+*Simulation* de la fenêtre 📈 Suivi, ou onglet du même nom sur le web.
+
+#### Règles du jeu
+
+1. À chaque barre de la fenêtre simulée, le score est recalculé **avec les
+   seules données disponibles à cet instant**.
+2. Si `|score|` tombe entre le seuil minimum et le seuil maximum et que son sens
+   est autorisé, une position s'ouvre au cours de clôture.
+3. Elle se referme au **premier motif de sortie rempli** (voir ci-dessous).
+4. **Aucune position ne se chevauche** : tant qu'une est ouverte, les signaux
+   suivants sont ignorés. C'est ce qui permet de faire travailler un capital
+   unique et d'obtenir un « combien j'aurais gagné » qui ait un sens.
+
+Chaque crypto est simulée **indépendamment**, avec la même mise de départ.
+
+#### Les quatre sorties
+
+Une position peut se refermer de quatre façons. Elles sont examinées à **chaque
+bougie** qui suit l'entrée, dans cet ordre, et la première qui se déclenche
+l'emporte. Mettre une condition à 0 la désactive.
+
+| Motif | Déclencheur | Quand |
+|---|---|---|
+| **Stop** | la perte atteint le pourcentage demandé | en cours de bougie |
+| **Objectif** | le gain atteint le pourcentage demandé | en cours de bougie |
+| **Retournement** | le score se retourne de X points contre la position, par rapport à sa valeur d'entrée | à la clôture |
+| **Durée** | la durée maximale de détention est atteinte | à la clôture |
+
+Trois choix méritent d'être explicités, parce qu'ils changent le résultat :
+
+- **Le stop et l'objectif se cherchent dans le haut et le bas de la bougie**, pas
+  seulement à la clôture. Sinon un stop posé à -3 % ne servirait à rien sur une
+  bougie qui plonge de 10 % avant de revenir clôturer à -1 %.
+- **Quand la même bougie touche les deux, le stop l'emporte.** On ne sait pas
+  lequel a été atteint en premier ; retenir le pire des deux ne fait jamais
+  paraître la stratégie meilleure qu'elle n'est.
+- **Si la bougie ouvre déjà au-delà du stop, la sortie se fait à l'ouverture.**
+  Le prix demandé n'existait plus. En pratique le cas est rare : le marché crypto
+  est continu, la clôture d'une bougie est l'ouverture de la suivante.
+
+Le **retournement** porte sur le score choisi, pas sur le prix : si vous simulez
+le momentum et qu'il passe de +0,60 à +0,28, il s'est retourné de 0,32 point et
+une position à seuil 0,30 est coupée. Le score vivant dans [-1, +1], 0,30 est
+déjà un franc changement d'avis. Pour une vente à découvert, le retournement est
+le score qui **remonte**.
+
+Le tableau de résultats indique par quoi chaque position s'est refermée, et une
+ligne récapitule la répartition. Ce n'est pas cosmétique : une stratégie qui ne
+gagne que par son stop et une autre qui gagne par son signal donnent le même
+capital final sans valoir la même chose.
+
+#### Paramètres
+
+| Paramètre | Effet |
+|---|---|
+| **Mise par crypto** | capital de départ, en dollars |
+| **Intervalle** | taille des bougies (`1d` … `1m`) |
+| **Périodes simulées** | nombre de barres passées rejouées |
+| **Score utilisé** | `Global`, `Tendance`, `Momentum`, `Volatilité` ou `Volume` |
+| **Sens autorisés** | croissant (achat), décroissant (vente à découvert), ou les deux |
+| **Seuils min / max** | plage sur la **valeur absolue** du score ; hors de cette plage, aucune position |
+| **Durée maximale de détention** | en bougies ; referme ce qui n'a pas été coupé avant |
+| **Retournement du score** | en points de score ; `0` désactive |
+| **Objectif de gain** | en % du prix d'entrée ; `0` désactive |
+| **Stop de perte** | en % du prix d'entrée ; `0` désactive |
+| **Frais par transaction** | comptés à l'entrée **et** à la sortie |
+| **Cryptos** | cases à cocher |
+
+Les frais ne sont pas un détail : sans eux, une stratégie qui multiplie les
+allers-retours paraît toujours rentable. C'est le biais le plus courant d'un
+backtest naïf. Sur un exemple à 50 allers-retours, les passer de 0 à 0,10 %
+coûte environ 4 points de rendement.
+
+#### Lire le résultat
+
+| Colonne | Signification |
+|---|---|
+| Trades | nombre d'allers-retours déclenchés |
+| Réussite % | part des trades gagnants |
+| Gain % | ce qu'a rapporté la stratégie |
+| **Marché %** | ce qu'aurait rapporté un simple achat-conservation sur la même période |
+| **Écart %** | `Gain − Marché` — **la seule colonne qui compte vraiment** |
+
+Gagner 8 % quand le marché en a pris 20, c'est avoir perdu 12 points à
+s'agiter. L'écart est la mesure honnête.
+
+Le détail des allers-retours porte une colonne **Motif** et la répartition des
+sorties est résumée au-dessus du graphique. Deux lectures s'y trouvent :
+
+- **Beaucoup de sorties par stop, peu par durée** : le signal n'a pas le temps
+  d'avoir raison, la position est coupée avant. Stop trop serré, ou signal qui
+  ne tient pas.
+- **Beaucoup de sorties par objectif et un gain qui baisse** : un objectif
+  tronque les gagnants sans toucher aux perdants. Sur un exemple à 28 trades,
+  poser un objectif à 2 % a fait passer le résultat de +11 % à -2 % : les
+  quelques mouvements qui portaient tout le rendement ont été coupés à 2 %,
+  pendant que les pertes couraient jusqu'à la durée maximale. Un objectif se
+  pose avec un stop, pas seul.
+
+#### Pas d'information future
+
+Le postulat qui rend la simulation praticable — et honnête — est que tous les
+indicateurs du projet sont **causaux** : moyennes glissantes, moyennes
+exponentielles, décalages vers le passé, boucles Supertrend et SAR. La valeur en
+barre *t* est donc identique qu'elle ait été calculée sur la série complète ou
+sur la série tronquée à *t*. Le projet calcule donc une fois, puis interprète
+chaque barre en tronquant : cinq fois plus rapide qu'un recalcul complet, sans
+qu'aucune donnée future ne puisse remonter dans le passé.
+
+Un test (`analyser_serie` vs `analyser` sur série tronquée) vérifie que les deux
+chemins donnent **exactement** les mêmes critères, sur les 20 indicateurs et des
+dizaines de positions.
+
+Compter environ **4 secondes par crypto** pour 250 périodes et 20 indicateurs.
+La simulation tourne dans un thread : l'interface reste utilisable.
 
 ### Précautions de lecture
 
@@ -522,6 +646,22 @@ simultanés d'une même crypto se marcheraient dessus.
 - Les intervalles courts font grossir le classeur vite : c'est voulu, ils
   permettent d'accumuler des vérifications en quelques heures au lieu de
   quelques semaines.
+- **Une simulation n'est pas une promesse.** Elle est rejouée sur une seule
+  trajectoire passée. Essayer vingt jeux de paramètres et garder le meilleur,
+  c'est choisir celui qui collait le mieux au hasard de cette période — pas
+  celui qui marchera demain. Le réglage qui gagne sur les 150 dernières barres
+  perd souvent sur les 150 précédentes : vérifiez-le en changeant la fenêtre.
+- L'entrée se fait au **cours de clôture** de la bougie qui produit le signal.
+  En pratique on entrerait à l'ouverture suivante, avec un écart. La simulation
+  est donc légèrement optimiste, en plus des frais.
+- Le stop et l'objectif sont supposés remplis **au prix exact demandé** dès que
+  la bougie le touche. Un vrai carnet d'ordres ne le garantit pas : sur un
+  mouvement violent, un stop passe plus bas. La simulation est là encore
+  légèrement optimiste.
+- **Chaque condition de sortie ajoutée est un paramètre de plus à régler**, donc
+  une occasion de plus de coller au hasard de la période testée. Quatre sorties
+  actives et douze réglages, c'est assez pour faire briller n'importe quelle
+  fenêtre de 150 barres. Changez la fenêtre avant de croire au résultat.
 
 ---
 

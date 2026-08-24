@@ -102,6 +102,74 @@ def figure_evolution(table, type_score: str = "Global", attribution=None,
     return figure
 
 
+def figure_capital(table, attribution=None, mode: str = "sombre",
+                   largeur: float = 11.0, hauteur: float = 4.6) -> Figure:
+    """
+    Courbes de capital d'une simulation, en pourcentage du capital de départ.
+
+    Même forme et même palette que l'évolution des scores : ce sont deux
+    trajectoires dans le temps, et une crypto garde sa couleur d'un graphique à
+    l'autre. Seule l'échelle diffère — elle s'ajuste ici, un gain n'ayant pas de
+    borne naturelle, contrairement à un score.
+    """
+    attribution = attribution or pr.AttributionCouleurs(mode)
+    surface = pr.SURFACES[mode]
+    encre = pr.ENCRES[mode]
+
+    figure = Figure(figsize=(largeur, hauteur), dpi=100, facecolor=surface)
+    axes = figure.add_subplot(111, facecolor=surface)
+
+    if table is None or table.empty:
+        axes.text(
+            0.5, 0.5, "Aucun trade déclenché avec ces paramètres.",
+            ha="center", va="center", color=encre["secondaire"], fontsize=11,
+        )
+        _depouiller(axes, encre)
+        return figure
+
+    # Le zéro sépare le gain de la perte : c'est le repère qui compte ici.
+    axes.axhline(0, color=encre["discrete"], linewidth=0.9, zorder=1)
+
+    colonnes = list(table.columns)[: pr.MAX_SERIES]
+    fins = []
+    for symbole in colonnes:
+        serie = table[symbole].dropna()
+        if serie.empty:
+            continue
+        axes.step(
+            serie.index, serie.values, where="post",
+            color=attribution.couleur(symbole), linewidth=EPAISSEUR_COURBE,
+            label=symbole, solid_capstyle="round", zorder=3,
+        )
+        fins.append((serie.index[-1], float(serie.values[-1]), symbole))
+
+    if len(colonnes) <= 4:
+        amplitude = float(table.max().max() - table.min().min())
+        _etiqueter_fins(axes, fins, encre, ecart=max(1.0, 0.06 * amplitude))
+
+    axes.set_title(
+        "Capital simulé", color=encre["primaire"], fontsize=13,
+        fontweight="bold", loc="left", pad=12,
+    )
+    axes.set_ylabel("Gain / perte (%)", color=encre["secondaire"], fontsize=10)
+
+    localisateur = mdates.AutoDateLocator(minticks=3, maxticks=8)
+    axes.xaxis.set_major_locator(localisateur)
+    axes.xaxis.set_major_formatter(mdates.ConciseDateFormatter(localisateur))
+    _depouiller(axes, encre)
+
+    if len(colonnes) >= 2:
+        legende = axes.legend(
+            loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False,
+            fontsize=9, handlelength=1.6,
+        )
+        for texte in legende.get_texts():
+            texte.set_color(encre["secondaire"])
+
+    figure.tight_layout()
+    return figure
+
+
 # ===========================================================================
 # HABILLAGE
 # ===========================================================================
@@ -119,11 +187,13 @@ def _fond(axes, encre):
     axes.axhline(0, color=encre["discrete"], linewidth=0.9, zorder=1)
 
 
-# Écart vertical minimal entre deux étiquettes de fin, en unités de score.
-ECART_ETIQUETTES = 0.10
+# Écart vertical minimal entre deux étiquettes de fin, en unités de l'axe.
+# Les scores vivent dans [-1, 1] : un écart fixe convient. Le capital n'a pas
+# d'amplitude bornée, son écart est donc calculé à partir des données.
+ECART_ETIQUETTES_SCORE = 0.10
 
 
-def _etiqueter_fins(axes, fins, encre):
+def _etiqueter_fins(axes, fins, encre, ecart: float = ECART_ETIQUETTES_SCORE):
     """
     Étiquettes au bout des courbes, écartées si elles se chevauchent.
 
@@ -141,9 +211,8 @@ def _etiqueter_fins(axes, fins, encre):
     ordonnees = sorted(fins, key=lambda fin: -fin[1])   # du plus haut au plus bas
     positions = [fin[1] for fin in ordonnees]
     for rang in range(1, len(positions)):
-        chevauche = positions[rang - 1] - positions[rang] < ECART_ETIQUETTES
-        if chevauche:
-            positions[rang] = positions[rang - 1] - ECART_ETIQUETTES
+        if positions[rang - 1] - positions[rang] < ecart:
+            positions[rang] = positions[rang - 1] - ecart
 
     for (abscisse, _, symbole), ordonnee in zip(ordonnees, positions):
         axes.annotate(
