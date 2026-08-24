@@ -121,6 +121,7 @@ CryptoDashboard/
 ├── notifications.py     Alertes Discord : webhook, message, réglages
 ├── suivi.py             Suivi des performances : journal Excel et vérification
 ├── simulation.py        Simulation historique : rejoue la stratégie sur le passé
+├── diagnostic.py        Diagnostic : les scores prédisent-ils quoi que ce soit ?
 ├── graphiques.py        Courbes d'évolution et de capital (partagées par les 2 interfaces)
 ├── interface_bureau.py  Tableau de bord customtkinter
 ├── fenetre_alertes.py   Fenêtre de configuration des alertes Discord

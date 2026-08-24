@@ -6,6 +6,7 @@ venv/
 
 # Journal de suivi (donnees locales, regenerables)
 suivi_scores.xlsx
+diagnostic_scores.xlsx
 
 # Secrets
 config_alertes.json   # contient l'URL du webhook Discord
