@@ -14,6 +14,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+import graphiques
 import notifications as notif
 import presentation as pr
 import suivi
@@ -43,10 +44,10 @@ def barre_laterale() -> tuple[list[str], int, str]:
     # Les boutons Tout / Rien agissent en préremplissant l'état des cases, qui
     # est ensuite lu par les widgets eux-mêmes.
     colonne_tout, colonne_rien = st.sidebar.columns(2)
-    if colonne_tout.button("Tout", use_container_width=True):
+    if colonne_tout.button("Tout", width="stretch"):
         for code in CODES_PAR_DEFAUT:
             st.session_state[f"case_{code}"] = True
-    if colonne_rien.button("Rien", use_container_width=True):
+    if colonne_rien.button("Rien", width="stretch"):
         for code in CODES_PAR_DEFAUT:
             st.session_state[f"case_{code}"] = False
 
@@ -108,11 +109,11 @@ def bloc_discord(resultats, intervalle: str):
         )
 
         gauche, droite = st.columns(2)
-        if gauche.button("Enregistrer", use_container_width=True):
+        if gauche.button("Enregistrer", width="stretch"):
             ok, detail = notif.enregistrer_config(config)
             (st.success if ok else st.error)(detail)
 
-        if droite.button("Envoyer", use_container_width=True, type="primary"):
+        if droite.button("Envoyer", width="stretch", type="primary"):
             if not resultats:
                 st.warning("Lancez d'abord une analyse.")
             else:
@@ -355,6 +356,71 @@ def onglet_suivi():
         afficher_tableau_html(style)
 
 
+def onglet_evolution():
+    """
+    Trajectoire des scores dans le temps : on choisit les cryptos, le type de
+    score et l'intervalle. Chaque analyse ajoute un point.
+    """
+    journal = st.session_state.get("journal") or suivi.JournalSuivi()
+    intervalles = journal.intervalles_suivis()
+    if not intervalles:
+        st.info(
+            "Aucun relevé pour l'instant. Lancez une analyse : chaque exécution "
+            "ajoute un point à la courbe."
+        )
+        return
+
+    reglages = st.columns([1, 1, 3])
+    type_score = reglages[0].selectbox("Score", list(suivi.TYPES_SCORE))
+    intervalle = reglages[1].selectbox("Intervalle", intervalles)
+
+    disponibles = journal.symboles_suivis(intervalle)
+    choisies = reglages[2].multiselect(
+        "Cryptos", disponibles, default=disponibles[: pr.MAX_SERIES],
+        help=f"Au plus {pr.MAX_SERIES} : au-delà, deux teintes deviendraient "
+             "indiscernables pour un lecteur daltonien.",
+    )
+    if len(choisies) > pr.MAX_SERIES:
+        st.warning(
+            f"Seules les {pr.MAX_SERIES} premières cryptos sont tracées "
+            f"({len(choisies) - pr.MAX_SERIES} laissée(s) de côté)."
+        )
+        choisies = choisies[: pr.MAX_SERIES]
+
+    table = journal.evolution(type_score, choisies, intervalle)
+
+    # L'attribution vit dans la session : une crypto garde sa couleur quand on
+    # modifie la sélection ou le type de score.
+    mode = "clair" if st.get_option("theme.base") == "light" else "sombre"
+    if st.session_state.get("mode_graphique") != mode:
+        st.session_state.mode_graphique = mode
+        st.session_state.couleurs = pr.AttributionCouleurs(mode)
+    couleurs = st.session_state.couleurs
+    couleurs.oublier(choisies)
+
+    st.pyplot(
+        graphiques.figure_evolution(
+            table, type_score, couleurs, mode=mode, intervalle=intervalle
+        ),
+        width="stretch",
+    )
+    st.caption(
+        "La bande grise est la zone neutre : entre -0,15 et +0,15, l'application "
+        "n'annonce aucune direction. L'échelle est fixée à [-1, +1] pour qu'une même "
+        "variation garde la même ampleur d'un relevé à l'autre."
+    )
+
+    # Tableau des valeurs : il double l'information portée par la couleur.
+    if not table.empty:
+        st.markdown("**Derniers relevés**")
+        valeurs = table.tail(12).sort_index(ascending=False).copy()
+        valeurs.index = valeurs.index.strftime("%d/%m/%Y %H:%M")
+        valeurs.index.name = "Relevé"
+        afficher_tableau_html(
+            valeurs.style.format(lambda v: "—" if v != v else f"{v:+.2f}")
+        )
+
+
 # ===========================================================================
 # PAGE
 # ===========================================================================
@@ -402,8 +468,9 @@ def main():
         sum(len(i.criteres) for r in resultats for i in r.resultats.values()),
     )
 
-    onglet_synthese, onglet_classement, onglet_detail, onglet_perf = st.tabs(
-        ["Synthèse par indicateur", "Classement", "Détail par crypto", "Suivi des performances"]
+    onglet_synthese, onglet_classement, onglet_detail, onglet_perf, onglet_evo = st.tabs(
+        ["Synthèse par indicateur", "Classement", "Détail par crypto",
+         "Suivi des performances", "Évolution des scores"]
     )
 
     with onglet_synthese:
@@ -427,6 +494,9 @@ def main():
 
     with onglet_perf:
         onglet_suivi()
+
+    with onglet_evo:
+        onglet_evolution()
 
 
 if __name__ == "__main__":

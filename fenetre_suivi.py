@@ -1,14 +1,14 @@
 """
-Fenêtre de suivi des performances.
+Fenêtre de suivi, en deux onglets.
 
-Affiche le contenu de l'onglet « Performance » du classeur de suivi : les scores
-produits par l'application se vérifient-ils dans les faits ?
+« Performance » répond à la question de fond : les scores produits se
+vérifient-ils dans les faits ? Bilan global, puis détail par tranche de score
+— un score élevé prédit-il mieux qu'un score faible ? —, par intervalle et par
+crypto.
 
-La lecture se fait de haut en bas :
-  - le bilan global ;
-  - le détail par tranche de score, qui répond à la vraie question — un score
-    élevé prédit-il mieux qu'un score faible ?
-  - le détail par intervalle et par crypto.
+« Évolution des scores » trace la trajectoire de chaque crypto dans le temps :
+on choisit les cryptos, le type de score (global ou l'une des quatre familles)
+et l'intervalle. Chaque analyse ajoute un point.
 """
 
 from __future__ import annotations
@@ -18,8 +18,11 @@ import subprocess
 import sys
 
 import customtkinter as ctk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+import graphiques
 import presentation as pr
+import suivi as mod_suivi
 
 POLICE_TITRE = ("Segoe UI", 15, "bold")
 POLICE_SOUS_TITRE = ("Segoe UI", 12, "bold")
@@ -64,8 +67,14 @@ class FenetreSuivi(ctk.CTkToplevel):
     def __init__(self, parent, journal):
         super().__init__(parent)
         self.title("Suivi des performances")
-        self.geometry("1080x680")
+        self.geometry("1240x800")
         self.journal = journal
+
+        # Attribution persistante : une crypto garde sa couleur d'un
+        # rafraîchissement à l'autre, et quand la sélection change.
+        self.couleurs = pr.AttributionCouleurs("sombre")
+        self.selection_cryptos = {}   # symbole -> BooleanVar
+        self.canevas = None
 
         self.transient(parent)
         self._construire()
@@ -87,29 +96,43 @@ class FenetreSuivi(ctk.CTkToplevel):
         self.etiquette_resume = ctk.CTkLabel(
             self, text="", font=POLICE_NORMALE, text_color="#9aa0a6", anchor="w"
         )
-        self.etiquette_resume.pack(fill="x", padx=16)
+        self.etiquette_resume.pack(fill="x", padx=16, pady=(0, 6))
 
+        onglets = ctk.CTkTabview(self, anchor="w")
+        onglets.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.onglet_performance = onglets.add("Performance")
+        self.onglet_evolution = onglets.add("Évolution des scores")
+
+        self._construire_performance(self.onglet_performance)
+        self._construire_evolution(self.onglet_evolution)
+
+        self._rafraichir()
+
+    def _construire_performance(self, parent):
         ctk.CTkLabel(
-            self,
+            parent,
             text="Le taux de réussite ne compte que les cas tranchés : un score neutre "
                  "(« Non prédictif ») ou un marché immobile (« Indécis ») n'est ni une "
                  "réussite ni un échec.\nLe rendement relatif compare chaque crypto à la "
                  "moyenne de son lot d'analyse : c'est lui qui dit si le score apporte "
                  "vraiment quelque chose.",
             font=POLICE_PETITE, text_color="#7c8695", justify="left", anchor="w",
-        ).pack(fill="x", padx=16, pady=(4, 8))
+        ).pack(fill="x", padx=4, pady=(4, 8))
 
-        self.zone = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.zone.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-
-        self._rafraichir()
+        self.zone = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        self.zone.pack(fill="both", expand=True, pady=(0, 4))
 
     # -- Contenu ------------------------------------------------------------
     def _rafraichir(self):
+        self.etiquette_resume.configure(text=self.journal.resume())
+        self._rafraichir_performance()
+        self._rafraichir_selection()
+        self._tracer()
+
+    def _rafraichir_performance(self):
         for enfant in self.zone.winfo_children():
             enfant.destroy()
 
-        self.etiquette_resume.configure(text=self.journal.resume())
         performance = self.journal.performance()
 
         if performance.empty:
@@ -181,6 +204,166 @@ class FenetreSuivi(ctk.CTkToplevel):
                 self.zone, text=texte, font=POLICE_NORMALE, width=largeur,
                 anchor=alignement, **options,
             ).grid(row=ligne, column=colonne, padx=2, pady=1, sticky="ew")
+
+    # =====================================================================
+    # ONGLET ÉVOLUTION
+    # =====================================================================
+    def _construire_evolution(self, parent):
+        """Barre de réglages, graphique, puis tableau des valeurs."""
+        reglages = ctk.CTkFrame(parent, fg_color="transparent")
+        reglages.pack(fill="x", pady=(6, 4))
+
+        ctk.CTkLabel(reglages, text="Score :", font=POLICE_NORMALE).pack(side="left")
+        self.menu_type = ctk.CTkOptionMenu(
+            reglages, width=140, font=POLICE_NORMALE,
+            values=list(mod_suivi.TYPES_SCORE),
+            command=lambda _v: self._tracer(),
+        )
+        self.menu_type.set("Global")
+        self.menu_type.pack(side="left", padx=(6, 18))
+
+        ctk.CTkLabel(reglages, text="Intervalle :", font=POLICE_NORMALE).pack(side="left")
+        self.menu_intervalle = ctk.CTkOptionMenu(
+            reglages, width=110, font=POLICE_NORMALE, values=["—"],
+            command=lambda _v: self._rafraichir_selection(garder=True) or self._tracer(),
+        )
+        self.menu_intervalle.pack(side="left", padx=6)
+
+        self.etiquette_selection = ctk.CTkLabel(
+            reglages, text="", font=POLICE_PETITE, text_color="#7c8695"
+        )
+        self.etiquette_selection.pack(side="right", padx=6)
+
+        # Cases à cocher des cryptos, sur une ligne défilante horizontalement.
+        self.zone_cryptos = ctk.CTkScrollableFrame(
+            parent, fg_color="transparent", orientation="horizontal", height=48
+        )
+        self.zone_cryptos.pack(fill="x", pady=(0, 6))
+
+        self.zone_graphique = ctk.CTkFrame(parent, fg_color="transparent")
+        self.zone_graphique.pack(fill="both", expand=True)
+
+        ctk.CTkLabel(
+            parent,
+            text="La bande grise est la zone neutre : entre -0,15 et +0,15, l'application "
+                 "n'annonce aucune direction.\nL'échelle est fixée à [-1, +1] : une même "
+                 "variation garde ainsi la même ampleur d'un relevé à l'autre.",
+            font=POLICE_PETITE, text_color="#7c8695", justify="left", anchor="w",
+        ).pack(fill="x", pady=(6, 2))
+
+        # Tableau des valeurs sous le graphique : il double l'information de la
+        # couleur, condition posée par les teintes claires les moins contrastées.
+        self.zone_valeurs = ctk.CTkScrollableFrame(parent, fg_color="transparent", height=130)
+        self.zone_valeurs.pack(fill="x", pady=(0, 4))
+
+    def _rafraichir_selection(self, garder: bool = False):
+        """
+        Reconstruit la liste des cryptos disponibles.
+
+        `garder=True` préserve les cases déjà cochées (changement d'intervalle) ;
+        sinon les plus souvent relevées sont présélectionnées.
+        """
+        intervalles = self.journal.intervalles_suivis()
+        valeurs = intervalles or ["—"]
+        self.menu_intervalle.configure(values=valeurs)
+        if self.menu_intervalle.get() not in valeurs:
+            self.menu_intervalle.set(valeurs[0])
+
+        intervalle = self.menu_intervalle.get()
+        symboles = self.journal.symboles_suivis(intervalle if intervalles else None)
+        deja = {s for s, v in self.selection_cryptos.items() if v.get()} if garder else set()
+
+        for enfant in self.zone_cryptos.winfo_children():
+            enfant.destroy()
+        self.selection_cryptos = {}
+
+        for rang, symbole in enumerate(symboles):
+            # Présélection des plus suivies, dans la limite de la palette.
+            actif = symbole in deja if garder else rang < pr.MAX_SERIES
+            variable = ctk.BooleanVar(value=actif)
+            self.selection_cryptos[symbole] = variable
+            ctk.CTkCheckBox(
+                self.zone_cryptos, text=symbole, variable=variable,
+                font=POLICE_PETITE, checkbox_width=17, checkbox_height=17,
+                width=80, command=self._tracer,
+            ).pack(side="left", padx=5)
+
+    def _cryptos_cochees(self) -> list[str]:
+        return [s for s, v in self.selection_cryptos.items() if v.get()]
+
+    def _tracer(self):
+        """Recalcule le tableau croisé et redessine le graphique."""
+        choisies = self._cryptos_cochees()
+        depassement = max(0, len(choisies) - pr.MAX_SERIES)
+        # Au-delà de huit séries, deux teintes deviendraient indiscernables :
+        # on tronque plutôt que d'inventer une neuvième couleur.
+        choisies = choisies[: pr.MAX_SERIES]
+        self.couleurs.oublier(choisies)
+
+        type_score = self.menu_type.get()
+        intervalle = self.menu_intervalle.get()
+        table = self.journal.evolution(
+            type_score, choisies, intervalle if intervalle != "—" else None
+        )
+
+        self.etiquette_selection.configure(
+            text=f"{len(choisies)} crypto(s) affichée(s)"
+                 + (f" — {depassement} au-delà des {pr.MAX_SERIES} couleurs disponibles"
+                    if depassement else "")
+        )
+
+        figure = graphiques.figure_evolution(
+            table, type_score, self.couleurs, mode="sombre",
+            intervalle=intervalle if intervalle != "—" else "",
+            largeur=10.6, hauteur=4.3,
+        )
+        if self.canevas is not None:
+            self.canevas.get_tk_widget().destroy()
+        self.canevas = FigureCanvasTkAgg(figure, master=self.zone_graphique)
+        self.canevas.draw()
+        self.canevas.get_tk_widget().pack(fill="both", expand=True)
+
+        self._afficher_valeurs(table)
+
+    def _afficher_valeurs(self, table):
+        """Les derniers relevés en clair, sous le graphique."""
+        for enfant in self.zone_valeurs.winfo_children():
+            enfant.destroy()
+        if table is None or table.empty:
+            return
+
+        derniers = table.tail(8)
+        colonnes = list(derniers.columns)
+
+        ctk.CTkLabel(
+            self.zone_valeurs, text="Relevé", font=POLICE_PETITE,
+            text_color="#9aa0a6", width=130, anchor="w",
+        ).grid(row=0, column=0, padx=3, sticky="ew")
+        for colonne, symbole in enumerate(colonnes, start=1):
+            cadre = ctk.CTkFrame(self.zone_valeurs, fg_color="transparent")
+            cadre.grid(row=0, column=colonne, padx=3, sticky="ew")
+            # Pastille colorée + nom en encre de texte : c'est la pastille qui
+            # porte l'identité, jamais la couleur du texte.
+            ctk.CTkLabel(
+                cadre, text=" ", width=10, height=10, corner_radius=3,
+                fg_color=self.couleurs.couleur(symbole),
+            ).pack(side="left", padx=(0, 4))
+            ctk.CTkLabel(
+                cadre, text=symbole, font=POLICE_PETITE, text_color="#9aa0a6"
+            ).pack(side="left")
+
+        for ligne, (horodatage, valeurs) in enumerate(derniers.iterrows(), start=1):
+            ctk.CTkLabel(
+                self.zone_valeurs, text=f"{horodatage:%d/%m %H:%M}", font=POLICE_PETITE,
+                width=130, anchor="w",
+            ).grid(row=ligne, column=0, padx=3, sticky="ew")
+            for colonne, symbole in enumerate(colonnes, start=1):
+                valeur = valeurs[symbole]
+                ctk.CTkLabel(
+                    self.zone_valeurs,
+                    text="—" if valeur != valeur else pr.formater_score(valeur),
+                    font=POLICE_PETITE, width=70,
+                ).grid(row=ligne, column=colonne, padx=3, sticky="ew")
 
     # -- Actions ------------------------------------------------------------
     def _ouvrir_classeur(self):

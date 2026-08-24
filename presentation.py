@@ -72,6 +72,76 @@ def couleur_critere(critere) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Palette des séries (graphiques d'évolution)
+# ---------------------------------------------------------------------------
+# Palette CATÉGORIELLE : elle encode une identité (quelle crypto), pas une
+# magnitude. L'ordre des emplacements est le mécanisme de sécurité pour les
+# daltonismes — il n'est pas décoratif et ne doit pas être réarrangé.
+#
+# Les deux modes sont validés séparément (les mêmes teintes, calées sur chaque
+# fond) : écart minimal entre voisines de 9,1 en clair et 8,4 en sombre sous
+# simulation protanope, 19,6 / 19,3 en vision normale. Trois teintes claires
+# passent sous 3:1 de contraste sur fond clair, d'où l'étiquetage direct des
+# courbes et le tableau de valeurs sous le graphique.
+PALETTE_SERIES = {
+    "clair": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+              "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
+    "sombre": ["#3987e5", "#d95926", "#199e70", "#c98500",
+               "#d55181", "#008300", "#9085e9", "#e66767"],
+}
+
+# Au-delà de 8 séries, deux teintes deviennent indiscernables sous daltonisme.
+# On ne génère jamais une 9e couleur : on limite la sélection.
+MAX_SERIES = len(PALETTE_SERIES["clair"])
+
+SURFACES = {"clair": "#fcfcfb", "sombre": "#1a1a19"}
+
+# Encres : le texte porte toujours une couleur de texte, jamais celle d'une
+# série. C'est la pastille colorée voisine qui porte l'identité.
+ENCRES = {
+    "clair": {
+        "primaire": "#0b0b0b", "secondaire": "#52514e",
+        "discrete": "#8a8a85", "grille": "#e6e5e1",
+    },
+    "sombre": {
+        "primaire": "#ffffff", "secondaire": "#c3c2b7",
+        "discrete": "#83827b", "grille": "#2e2e2c",
+    },
+}
+
+
+class AttributionCouleurs:
+    """
+    Attribue une couleur stable à chaque crypto.
+
+    Règle essentielle : la couleur suit l'ENTITÉ, jamais son rang. Décocher une
+    crypto ne doit pas repeindre les autres — un lecteur qui a appris « BTC est
+    bleu » serait sinon induit en erreur. Chaque symbole conserve donc son
+    emplacement pour toute la durée de la session.
+    """
+
+    def __init__(self, mode: str = "sombre"):
+        self.mode = mode
+        self._emplacements: dict[str, int] = {}
+
+    def couleur(self, symbole: str) -> str:
+        palette = PALETTE_SERIES[self.mode]
+        if symbole not in self._emplacements:
+            occupes = set(self._emplacements.values())
+            libres = [i for i in range(len(palette)) if i not in occupes]
+            if not libres:
+                # Ne devrait pas arriver : la sélection est plafonnée en amont.
+                return ENCRES[self.mode]["discrete"]
+            self._emplacements[symbole] = libres[0]
+        return palette[self._emplacements[symbole]]
+
+    def oublier(self, symboles_actifs):
+        """Libère les emplacements des cryptos retirées de la sélection."""
+        actifs = set(symboles_actifs)
+        self._emplacements = {s: i for s, i in self._emplacements.items() if s in actifs}
+
+
+# ---------------------------------------------------------------------------
 # Libellés courts
 # ---------------------------------------------------------------------------
 # Version compacte des synthèses, pour les cellules étroites du tableau.

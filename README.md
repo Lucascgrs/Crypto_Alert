@@ -120,9 +120,10 @@ CryptoDashboard/
 ├── presentation.py      Couleurs, libellés et formats partagés par les 2 interfaces
 ├── notifications.py     Alertes Discord : webhook, message, réglages
 ├── suivi.py             Suivi des performances : journal Excel et vérification
+├── graphiques.py        Courbes d'évolution des scores (partagées par les 2 interfaces)
 ├── interface_bureau.py  Tableau de bord customtkinter
 ├── fenetre_alertes.py   Fenêtre de configuration des alertes Discord
-├── fenetre_suivi.py     Fenêtre de consultation des performances
+├── fenetre_suivi.py     Fenêtre de suivi : performances + évolution des scores
 ├── interface_web.py     Tableau de bord Streamlit
 ├── main.py              Démonstration en ligne de commande
 └── indicateurs/
@@ -439,6 +440,10 @@ rendement, rendement du lot, rendement relatif, sens prédit, sens réel et
 **`Performance`** — le tableau qui répond à la question, découpé par
 regroupement : bilan global, **par tranche de score**, par intervalle, par crypto.
 
+**`Évolution`** — le score global de chaque crypto au fil du temps, en tableau
+croisé (horodatage et intervalle en lignes, une colonne par crypto). Sélectionnez
+le bloc dans Excel et insérez un graphique en courbes : c'est prêt pour ça.
+
 ### Comment lire le résultat
 
 Quatre issues, volontairement distinctes :
@@ -470,6 +475,42 @@ Deux lectures comptent vraiment :
 Bouton **📈 Suivi** dans l'interface de bureau (avec un bouton pour ouvrir le
 classeur dans Excel), onglet **Suivi des performances** dans l'interface web, ou
 affichage direct en fin d'exécution de `python main.py`.
+
+### Évolution des scores
+
+Un onglet dédié trace la trajectoire de chaque crypto dans le temps — bouton
+**📈 Suivi** au bureau (onglet *Évolution des scores*), onglet du même nom sur le
+web. Chaque analyse ajoute un point.
+
+Trois réglages :
+
+| Réglage | Choix |
+|---|---|
+| **Score** | `Global`, `Tendance`, `Momentum`, `Volatilité` ou `Volume` |
+| **Intervalle** | ceux présents dans le journal |
+| **Cryptos** | cases à cocher, 8 au maximum |
+
+L'intervalle doit être choisi : superposer des scores journaliers et des scores
+en 5 minutes sur un même axe mélangerait deux échelles de temps, et deux relevés
+simultanés d'une même crypto se marcheraient dessus.
+
+**Ce que le graphique respecte, et pourquoi :**
+
+- **Une crypto garde sa couleur.** Décocher une série ne repeint pas les autres :
+  un lecteur qui a appris « BTC est bleu » serait sinon induit en erreur.
+- **Huit séries au maximum.** Au-delà, deux teintes deviennent indiscernables
+  pour un lecteur daltonien. Le projet ne génère jamais une neuvième couleur, il
+  tronque et le signale.
+- **Palette vérifiée, pas choisie à l'œil.** Les huit teintes sont validées dans
+  les deux modes (écart minimal entre voisines de 9,1 en clair et 8,4 en sombre
+  sous simulation protanope). Trois teintes claires passent sous 3:1 de
+  contraste, d'où l'étiquetage direct des courbes et le tableau de valeurs sous
+  le graphique — l'identité ne repose jamais sur la seule couleur.
+- **Échelle fixée à [-1, +1].** Un score vit toujours dans cet intervalle ; une
+  échelle qui s'ajusterait ferait paraître spectaculaire une variation de 0,02.
+- **La bande grise est la zone neutre.** Entre -0,15 et +0,15, l'application
+  n'annonce aucune direction — c'est le seuil qui produit les « Non prédictif »
+  de l'onglet Performance.
 
 ### Précautions de lecture
 

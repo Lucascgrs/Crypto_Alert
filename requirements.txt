@@ -18,10 +18,11 @@ yfinance>=0.2
 # Suivi des performances
 # ---------------------------------------------------------------------------
 openpyxl>=3.1          # lecture / écriture du classeur suivi_scores.xlsx
+matplotlib>=3.7        # courbes d'évolution des scores (bureau et web)
 
 # ---------------------------------------------------------------------------
 # Interfaces
 # ---------------------------------------------------------------------------
 customtkinter>=5.2     # interface de bureau  -> python interface_bureau.py
-streamlit>=1.30        # interface web        -> python -m streamlit run interface_web.py
+streamlit>=1.49        # interface web        -> python -m streamlit run interface_web.py
 jinja2>=3.0            # rendu HTML des tableaux web (via pandas Styler)

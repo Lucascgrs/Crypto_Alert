@@ -7,11 +7,12 @@ quelques bougies). Lors d'une analyse ultérieure, tous les relevés dont
 l'échéance est passée sont confrontés au prix réellement observé, et le résultat
 est classé « Correct », « Incorrect » ou « Indécis ».
 
-Le classeur compte trois onglets, pour ne pas surcharger le premier :
+Le classeur compte quatre onglets, pour ne pas surcharger le premier :
 
   Relevés        journal brut, une ligne par crypto et par analyse ;
   Vérifications  les relevés arrivés à échéance, avec leur résultat ;
-  Performance    les taux de réussite agrégés — l'onglet qui répond à la question.
+  Performance    les taux de réussite agrégés — l'onglet qui répond à la question ;
+  Évolution      le score global au fil du temps, en tableau croisé prêt à tracer.
 
 Le prix d'échéance est retrouvé dans l'historique OHLCV déjà téléchargé par
 l'analyse : on lit la bougie correspondant à l'échéance, et non le prix du
@@ -45,6 +46,16 @@ COLONNES_VERIFICATIONS = [
     "rendement_marche_pct", "rendement_relatif_pct",
     "sens_reel", "resultat", "precision_prix",
 ]
+
+# Les scores traçables : le score global et les quatre scores de famille.
+# Les clés sont les libellés affichés, les valeurs les colonnes du journal.
+TYPES_SCORE = {
+    "Global": "score",
+    "Tendance": "score_tendance",
+    "Momentum": "score_momentum",
+    "Volatilité": "score_volatilite",
+    "Volume": "score_volume",
+}
 
 STATUT_ATTENTE = "En attente"
 STATUT_VERIFIE = "Vérifié"
@@ -160,6 +171,9 @@ class JournalSuivi:
                 self.releves.to_excel(writer, sheet_name="Relevés", index=False)
                 self.verifications.to_excel(writer, sheet_name="Vérifications", index=False)
                 self.performance().to_excel(writer, sheet_name="Performance", index=False)
+                self.evolution_pour_excel().to_excel(
+                    writer, sheet_name="Évolution", index=False
+                )
                 _ajuster_colonnes(writer)
         except PermissionError:
             return False, (
@@ -400,6 +414,68 @@ class JournalSuivi:
         # (les tranches de score doivent se lire du plus baissier au plus haussier,
         # un tri par volume les mélangerait).
         return pd.DataFrame(lignes, columns=colonnes)
+
+    # -- 4. Évolution des scores -------------------------------------------
+    def intervalles_suivis(self) -> list[str]:
+        """Intervalles présents dans le journal, le plus fréquent en premier."""
+        if self.releves.empty:
+            return []
+        return list(self.releves["intervalle"].value_counts().index)
+
+    def symboles_suivis(self, intervalle: str | None = None) -> list[str]:
+        """Cryptos présentes dans le journal, les plus souvent relevées d'abord."""
+        table = self.releves
+        if table.empty:
+            return []
+        if intervalle:
+            table = table[table["intervalle"] == intervalle]
+        return list(table["symbole"].value_counts().index)
+
+    def evolution(self, type_score: str = "Global", symboles: list[str] | None = None,
+                  intervalle: str | None = None) -> pd.DataFrame:
+        """
+        Tableau croisé de l'évolution d'un score : une ligne par horodatage,
+        une colonne par crypto.
+
+        Un intervalle doit être choisi : superposer des scores journaliers et des
+        scores en 5 minutes sur un même axe mélangerait deux échelles de temps,
+        et deux relevés simultanés de la même crypto se marcheraient dessus.
+        """
+        colonne = TYPES_SCORE.get(type_score, "score")
+        table = self.releves
+        if table.empty or colonne not in table.columns:
+            return pd.DataFrame()
+
+        if intervalle:
+            table = table[table["intervalle"] == intervalle]
+        if symboles:
+            table = table[table["symbole"].isin(symboles)]
+        table = table.dropna(subset=["horodatage", colonne])
+        if table.empty:
+            return pd.DataFrame()
+
+        # `last` et non `mean` : deux relevés d'une même crypto au même instant
+        # seraient un doublon d'exécution, pas deux mesures à moyenner.
+        croise = table.pivot_table(
+            index="horodatage", columns="symbole", values=colonne, aggfunc="last"
+        )
+        return croise.sort_index()
+
+    def evolution_pour_excel(self) -> pd.DataFrame:
+        """
+        Version à plat du score global pour l'onglet Excel : horodatage et
+        intervalle en colonnes, une colonne par crypto. Prête à être
+        sélectionnée d'un bloc pour insérer un graphique dans Excel.
+        """
+        if self.releves.empty:
+            return pd.DataFrame(columns=["horodatage", "intervalle"])
+
+        table = self.releves.dropna(subset=["horodatage"])
+        croise = table.pivot_table(
+            index=["horodatage", "intervalle"], columns="symbole",
+            values="score", aggfunc="last",
+        )
+        return croise.sort_index().reset_index()
 
     # -- Raccourcis ---------------------------------------------------------
     def resume(self) -> str:
