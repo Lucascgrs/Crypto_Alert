@@ -235,9 +235,19 @@ class Simulateur:
 
         # Simuler le score « Momentum » sans aucun indicateur de momentum
         # sélectionné ne produirait aucun trade, sans rien expliquer.
+        #
+        # Les indicateurs CONTEXTUELS (ATR, compression, efficience) ne comptent
+        # pas ici : ils appartiennent bien à la famille, mais ne produisent aucun
+        # critère directionnel, donc aucun score. Les accepter laisserait la
+        # simulation tourner à vide en annonçant zéro trade sans raison visible.
         categorie = CATEGORIES_SCORE.get(parametres.type_score)
-        if categorie and not any(i.categorie == categorie for i in indicateurs):
+        notants = [i for i in indicateurs if i.categorie == categorie and not i.contextuel]
+        if categorie and not notants:
+            presents = any(i.categorie == categorie for i in indicateurs)
             manque = (
+                f"Les indicateurs de la famille « {parametres.type_score} » "
+                "sélectionnés sont tous contextuels : ils ne produisent pas de score."
+                if presents else
                 f"Aucun indicateur de la famille « {parametres.type_score} » "
                 "n'est sélectionné : ce score ne peut pas être calculé."
             )
@@ -249,9 +259,9 @@ class Simulateur:
         echauffement = periodes_requises(indicateurs)
 
         # Il faut de quoi « chauffer » les indicateurs, puis la fenêtre simulée,
-        # puis de quoi refermer la dernière position.
-        besoin = echauffement + parametres.periodes + parametres.duree_position
-        nb_bougies = min(besoin, 1000)   # plafond imposé par Binance
+        # puis de quoi refermer la dernière position. Pas de plafond ici :
+        # `SourceDonnees._binance` pagine au-delà de 1000 bougies.
+        nb_bougies = echauffement + parametres.periodes + parametres.duree_position
 
         resultats = []
         for rang, symbole in enumerate(parametres.symboles):
@@ -488,11 +498,22 @@ class Simulateur:
 
     @staticmethod
     def tableau_trades(resultats: list[ResultatSimulation]) -> pd.DataFrame:
-        """Le détail de tous les allers-retours, du plus récent au plus ancien."""
+        """
+        Le détail de tous les allers-retours, du plus récent au plus ancien.
+
+        Entrée et Sortie sont converties en heure de Paris : en interne
+        (`Trade.entree` / `sortie`), tout reste en UTC, comme l'historique
+        Binance dont elles proviennent. Le tri par « plus récent » se fait AVANT
+        la conversion, sur les valeurs UTC — le résultat est identique dans les
+        deux fuseaux, mais autant trier sur le référentiel natif.
+        """
         lignes = [t.to_dict() for r in resultats for t in r.trades]
         if not lignes:
             return pd.DataFrame()
-        return pd.DataFrame(lignes).sort_values("Entrée", ascending=False).reset_index(drop=True)
+        table = pd.DataFrame(lignes).sort_values("Entrée", ascending=False).reset_index(drop=True)
+        table["Entrée"] = pr.heure_fr(table["Entrée"])
+        table["Sortie"] = pr.heure_fr(table["Sortie"])
+        return table
 
     @staticmethod
     def repartition_sorties(resultats: list[ResultatSimulation]) -> dict:
@@ -509,6 +530,10 @@ class Simulateur:
         Courbes de capital alignées sur un index commun, en pourcentage du
         capital initial — sinon deux cryptos de mises identiques mais de dates
         différentes ne seraient pas comparables.
+
+        L'index (UTC en interne, comme `resultat.courbe`) est converti en heure
+        de Paris avant de renvoyer : c'est ce tableau qui alimente directement
+        le graphique de capital.
         """
         series = {}
         for resultat in resultats:
@@ -519,7 +544,9 @@ class Simulateur:
             return pd.DataFrame()
         # Le capital ne change qu'aux sorties de position : entre deux, il reste
         # à son niveau, d'où le remplissage vers l'avant.
-        return pd.DataFrame(series).sort_index().ffill()
+        table = pd.DataFrame(series).sort_index().ffill()
+        table.index = pr.heure_fr(table.index)
+        return table
 
 
 def resume(resultats: list[ResultatSimulation], parametres: ParametresSimulation) -> str:

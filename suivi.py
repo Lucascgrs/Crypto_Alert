@@ -17,17 +17,41 @@ Le classeur compte quatre onglets, pour ne pas surcharger le premier :
 Le prix d'échéance est retrouvé dans l'historique OHLCV déjà téléchargé par
 l'analyse : on lit la bougie correspondant à l'échéance, et non le prix du
 moment. La vérification est donc exacte, même longtemps après coup.
+
+Tous les horodatages du journal (`horodatage`, `echeance`, `verifie_le`) sont en
+UTC naïf, comme l'index des bougies Binance : c'est ce qui permet de comparer
+une échéance à une bougie sans erreur, quel que soit le fuseau de la machine qui
+exécute le code (voir `_maintenant_utc`). Pour l'affichage (graphique
+d'évolution), `evolution()` convertit en heure de Paris via
+`presentation.heure_fr` ; le classeur Excel garde l'UTC et l'indique dans ses
+en-têtes de colonne.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
 import config
+import presentation as pr
 from indicateurs import Categorie
+
+def _maintenant_utc() -> datetime:
+    """
+    L'instant présent, en UTC et naïf (sans tzinfo).
+
+    Les bougies Binance sont indexées en UTC naïf. `datetime.now()` renvoie
+    l'heure de la MACHINE : sur un poste réglé sur Paris, une échéance calculée
+    avec `datetime.now()` serait décalée d'une à deux heures (heure d'été) par
+    rapport aux bougies auxquelles elle est ensuite comparée — le journal
+    attendrait alors une bougie qui n'arrivera jamais à l'heure prévue. Cette
+    fonction est le référentiel à utiliser partout où un horodatage du journal
+    est comparé à l'historique OHLCV.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 # --- Colonnes des trois onglets -------------------------------------------
 COLONNES_RELEVES = [
@@ -163,17 +187,27 @@ class JournalSuivi:
 
     def sauvegarder(self) -> tuple[bool, str]:
         """
-        Écrit les trois onglets. L'échec le plus courant est un classeur resté
+        Écrit les quatre onglets. L'échec le plus courant est un classeur resté
         ouvert dans Excel : on le dit explicitement plutôt que de lever.
+
+        Les colonnes d'horodatage sont renommées avec un suffixe « (UTC) » au
+        moment de l'écriture, sans toucher aux DataFrames internes : c'est le
+        seul endroit du classeur qui n'est pas déjà converti en heure de Paris
+        (voir `evolution()`), et il vaut mieux le dire dans l'en-tête que de
+        laisser deviner.
         """
         try:
             with pd.ExcelWriter(self.chemin, engine="openpyxl") as writer:
-                self.releves.to_excel(writer, sheet_name="Relevés", index=False)
-                self.verifications.to_excel(writer, sheet_name="Vérifications", index=False)
+                self.releves.rename(columns={
+                    "horodatage": "horodatage (UTC)", "echeance": "echeance (UTC)",
+                }).to_excel(writer, sheet_name="Relevés", index=False)
+                self.verifications.rename(columns={
+                    "horodatage": "horodatage (UTC)", "verifie_le": "verifie_le (UTC)",
+                }).to_excel(writer, sheet_name="Vérifications", index=False)
                 self.performance().to_excel(writer, sheet_name="Performance", index=False)
-                self.evolution_pour_excel().to_excel(
-                    writer, sheet_name="Évolution", index=False
-                )
+                self.evolution_pour_excel().rename(
+                    columns={"horodatage": "horodatage (UTC)"}
+                ).to_excel(writer, sheet_name="Évolution", index=False)
                 _ajuster_colonnes(writer)
         except PermissionError:
             return False, (
@@ -193,7 +227,7 @@ class JournalSuivi:
         Les cryptos sans score exploitable sont ignorées : les enregistrer
         polluerait le journal de lignes invérifiables.
         """
-        horodatage = (horodatage or datetime.now()).replace(microsecond=0)
+        horodatage = (horodatage or _maintenant_utc()).replace(microsecond=0)
         duree = horizon_minutes(intervalle)
         echeance = horodatage + timedelta(minutes=duree)
         liste_codes = ",".join(codes) if codes else ""
@@ -259,7 +293,7 @@ class JournalSuivi:
         Renvoie un petit bilan {verifies, expires, en_attente}.
         """
         historiques = historiques or {}
-        maintenant = maintenant or datetime.now()
+        maintenant = maintenant or _maintenant_utc()
         bilan = {"verifies": 0, "expires": 0, "en_attente": 0}
 
         if self.releves.empty:
@@ -440,6 +474,9 @@ class JournalSuivi:
         Un intervalle doit être choisi : superposer des scores journaliers et des
         scores en 5 minutes sur un même axe mélangerait deux échelles de temps,
         et deux relevés simultanés de la même crypto se marcheraient dessus.
+
+        L'index renvoyé est en heure de Paris (le journal stocke en UTC) : cette
+        fonction n'alimente que le graphique d'évolution, jamais l'export Excel.
         """
         colonne = TYPES_SCORE.get(type_score, "score")
         table = self.releves
@@ -459,7 +496,11 @@ class JournalSuivi:
         croise = table.pivot_table(
             index="horodatage", columns="symbole", values=colonne, aggfunc="last"
         )
-        return croise.sort_index()
+        croise = croise.sort_index()
+        # Le journal stocke en UTC (voir _maintenant_utc) ; ce tableau alimente
+        # directement le graphique, donc c'est ici qu'on bascule en heure FR.
+        croise.index = pr.heure_fr(croise.index)
+        return croise
 
     def evolution_pour_excel(self) -> pd.DataFrame:
         """

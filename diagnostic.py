@@ -21,6 +21,12 @@ On mesure donc, sur des milliers de barres :
     les cryptos montent et descendent ensemble, un score qui ne fait que suivre
     le marché n'apporte rien en propre.
 
+Tout est mesuré DEUX FOIS, une par approche (cf. `indicateurs.Approche`) : les
+20 indicateurs suiveurs d'un côté, les 7 indicateurs d'anticipation de l'autre,
+sur exactement les mêmes barres. C'est cette comparaison qui dit si la seconde
+approche apporte quelque chose, ou si elle se contente de décrire le passé
+autrement.
+
 Tout est écrit dans un classeur Excel, une feuille par question.
 
     python diagnostic.py
@@ -33,7 +39,7 @@ import time
 import pandas as pd
 
 from donnees import SourceDonnees
-from indicateurs import Categorie, creer, periodes_requises
+from indicateurs import REGISTRE, Approche, Categorie, creer, periodes_requises
 from moteur import ResultatCrypto
 
 # --- Ce que l'on mesure -----------------------------------------------------
@@ -48,12 +54,27 @@ HORIZONS = [1, 3, 6, 12, 24]
 TRANCHES = [-1.01, -0.45, -0.15, 0.15, 0.45, 1.01]
 NOMS_TRANCHES = ["Fortement négatif", "Négatif", "Neutre", "Positif", "Fortement positif"]
 
-CATEGORIES = {
-    "Tendance": Categorie.TENDANCE,
-    "Momentum": Categorie.MOMENTUM,
-    "Volatilité": Categorie.VOLATILITE,
-    "Volume": Categorie.VOLUME,
+# Les scores mesurés, sous la forme (approche, catégorie ou None pour le total).
+#
+# Les deux premiers sont les scores d'ENSEMBLE de chaque approche : ce sont eux
+# que l'on compare, tout le reste sert à comprendre d'où vient l'écart. Les
+# familles d'une approche ne sont détaillées que là où elles existent : côté
+# anticipation, la seule « tendance » est l'efficience, qui est contextuelle et
+# ne produit donc aucun score.
+SCORES = {
+    "Suiveurs": (Approche.SUIVEUSE, None),
+    "Anticipation": (Approche.ANTICIPATION, None),
+    "Suiveurs Tendance": (Approche.SUIVEUSE, Categorie.TENDANCE),
+    "Suiveurs Momentum": (Approche.SUIVEUSE, Categorie.MOMENTUM),
+    "Suiveurs Volatilité": (Approche.SUIVEUSE, Categorie.VOLATILITE),
+    "Suiveurs Volume": (Approche.SUIVEUSE, Categorie.VOLUME),
+    "Anticip. Momentum": (Approche.ANTICIPATION, Categorie.MOMENTUM),
+    "Anticip. Volatilité": (Approche.ANTICIPATION, Categorie.VOLATILITE),
+    "Anticip. Volume": (Approche.ANTICIPATION, Categorie.VOLUME),
 }
+
+# Les deux scores d'ensemble, ceux que l'on met face à face.
+PRINCIPAUX = ["Suiveurs", "Anticipation"]
 
 
 # ===========================================================================
@@ -69,7 +90,8 @@ def observer(symbole: str, intervalle: str, periodes: int, source: SourceDonnees
     """
     echauffement = periodes_requises(indicateurs)
     horizon_max = max(HORIZONS)
-    nb_bougies = min(echauffement + periodes + horizon_max, 1000)
+    # Pas de plafond ici : `SourceDonnees._binance` pagine au-delà de 1000 bougies.
+    nb_bougies = echauffement + periodes + horizon_max
 
     df = source.historique(symbole, intervalle, nb_bougies)
     if df is None or df.empty:
@@ -98,10 +120,12 @@ def observer(symbole: str, intervalle: str, periodes: int, source: SourceDonnees
             "symbole": symbole,
             "intervalle": intervalle,
             "horodatage": df.index[position],
-            "Global": photo.score_global,
         }
-        for nom, categorie in CATEGORIES.items():
-            ligne[nom] = photo.score_categorie(categorie)
+        for nom, (approche, categorie) in SCORES.items():
+            ligne[nom] = (
+                photo.score_approche(approche) if categorie is None
+                else photo.score_categorie(categorie, approche)
+            )
         # Score de chaque indicateur pris isolément : c'est ce qui permet de
         # désigner les coupables au lieu de condamner le score global en bloc.
         for code, resultat in photo.resultats.items():
@@ -120,7 +144,9 @@ def observer(symbole: str, intervalle: str, periodes: int, source: SourceDonnees
 def collecter(symboles, intervalles, periodes: int, verbeux: bool = True) -> pd.DataFrame:
     """Assemble les observations de toutes les cryptos et de tous les intervalles."""
     source = SourceDonnees(verbeux=False)
-    indicateurs = creer(None)          # tous les indicateurs du registre
+    # Explicitement TOUT le registre : `creer(None)` ne donnerait que la
+    # sélection par défaut, or on veut mesurer les deux approches d'un coup.
+    indicateurs = creer(list(REGISTRE))
 
     morceaux = []
     for intervalle in intervalles:
@@ -159,9 +185,8 @@ def correlations(table: pd.DataFrame) -> pd.DataFrame:
     haut, plus le rendement l'est ». C'est exactement la promesse d'un score.
     """
     lignes = []
-    scores = ["Global"] + list(CATEGORIES)
     for intervalle, groupe in table.groupby("intervalle"):
-        for score in scores:
+        for score in SCORES:
             for horizon in HORIZONS:
                 for etiquette, prefixe in [("absolu", "r"), ("relatif", "rel")]:
                     paire = groupe[[score, f"{prefixe}{horizon}"]].dropna()
@@ -179,7 +204,7 @@ def correlations(table: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(lignes)
 
 
-def par_tranche(table: pd.DataFrame, score: str = "Global") -> pd.DataFrame:
+def par_tranche(table: pd.DataFrame, score: str = "Suiveurs") -> pd.DataFrame:
     """
     Rendement moyen par tranche de score.
 
@@ -230,29 +255,34 @@ def passe_vs_futur(table: pd.DataFrame) -> pd.DataFrame:
     table = table.sort_values(["symbole", "intervalle", "horodatage"])
     lignes = []
     for intervalle, groupe in table.groupby("intervalle"):
-        for horizon in HORIZONS:
-            colonne = f"r{horizon}"
-            # Le rendement des H bougies precedentes, c'est le rendement futur
-            # decale de H barres vers l'avant.
-            passe = groupe.groupby("symbole")[colonne].shift(horizon)
-            avant = pd.concat([groupe["Global"], passe], axis=1).dropna()
-            apres = groupe[["Global", colonne]].dropna()
-            relatif = groupe[["Global", f"rel{horizon}"]].dropna()
-            if len(avant) < 50 or len(apres) < 50:
-                continue
-            lignes.append({
-                "Intervalle": intervalle,
-                "Horizon (bougies)": horizon,
-                "Corrélation au PASSÉ": round(avant.corr(method="spearman").iloc[0, 1], 3),
-                "Corrélation au FUTUR": round(apres.corr(method="spearman").iloc[0, 1], 3),
-                "Corrélation au FUTUR relatif": round(
-                    relatif.corr(method="spearman").iloc[0, 1], 3),
-                "Observations": len(apres),
-            })
+        for score in PRINCIPAUX:
+            for horizon in HORIZONS:
+                colonne = f"r{horizon}"
+                # Le rendement des H bougies precedentes, c'est le rendement futur
+                # decale de H barres vers l'avant.
+                passe = groupe.groupby("symbole")[colonne].shift(horizon)
+                avant = pd.concat([groupe[score], passe], axis=1).dropna()
+                apres = groupe[[score, colonne]].dropna()
+                relatif = groupe[[score, f"rel{horizon}"]].dropna()
+                if len(avant) < 50 or len(apres) < 50:
+                    continue
+                lignes.append({
+                    "Intervalle": intervalle,
+                    "Approche": score,
+                    "Horizon (bougies)": horizon,
+                    "Corrélation au PASSÉ": round(
+                        avant.corr(method="spearman").iloc[0, 1], 3),
+                    "Corrélation au FUTUR": round(
+                        apres.corr(method="spearman").iloc[0, 1], 3),
+                    "Corrélation au FUTUR relatif": round(
+                        relatif.corr(method="spearman").iloc[0, 1], 3),
+                    "Observations": len(apres),
+                })
     return pd.DataFrame(lignes)
 
 
-def par_regime(table: pd.DataFrame, horizon: int = 6, seuil: float = 0.30) -> pd.DataFrame:
+def par_regime(table: pd.DataFrame, score: str = "Suiveurs", horizon: int = 6,
+               seuil: float = 0.30) -> pd.DataFrame:
     """
     Le score marche-t-il mieux selon que le marché monte ou descend ?
 
@@ -275,12 +305,13 @@ def par_regime(table: pd.DataFrame, horizon: int = 6, seuil: float = 0.30) -> pd
 
     lignes = []
     for (intervalle, regime), groupe in table.groupby(["intervalle", "regime"]):
-        haut = groupe[groupe["Global"] >= seuil]
-        bas = groupe[groupe["Global"] <= -seuil]
+        haut = groupe[groupe[score] >= seuil]
+        bas = groupe[groupe[score] <= -seuil]
         if len(haut) < 40 or len(bas) < 40:
             continue
         lignes.append({
             "Intervalle": intervalle,
+            "Approche": score,
             "Régime": regime,
             "Score fort : rendement %": round(haut[f"r{horizon}"].mean(), 3),
             "Score faible : rendement %": round(bas[f"r{horizon}"].mean(), 3),
@@ -299,19 +330,31 @@ def par_indicateur(table: pd.DataFrame, horizon: int = 6) -> pd.DataFrame:
 
     Un score global médiocre peut cacher deux moitiés qui s'annulent : des
     indicateurs utiles et des indicateurs franchement contre-productifs.
+
+    La colonne « Spearman passé » est le contrôle de construction du module
+    `anticipation.py` : un indicateur d'anticipation qui afficherait +0,80 au
+    passé comme un Supertrend ne serait qu'un suiveur déguisé, quel que soit le
+    nom qu'on lui donne.
     """
+    table = table.sort_values(["symbole", "intervalle", "horodatage"])
     codes = [c for c in table.columns if c.startswith("i_")]
     lignes = []
     for intervalle, groupe in table.groupby("intervalle"):
+        futur = groupe[f"r{horizon}"]
+        passe = groupe.groupby("symbole")[f"r{horizon}"].shift(horizon)
         for code in codes:
-            paire = groupe[[code, f"r{horizon}"]].dropna()
+            paire = pd.concat([groupe[code], futur], axis=1).dropna()
             relatif = groupe[[code, f"rel{horizon}"]].dropna()
-            if len(paire) < 50:
+            avant = pd.concat([groupe[code], passe], axis=1).dropna()
+            if len(paire) < 50 or len(avant) < 50:
                 continue
+            classe = REGISTRE.get(code[2:])
             lignes.append({
                 "Intervalle": intervalle,
                 "Indicateur": code[2:],
+                "Approche": "" if classe is None else classe.approche.value,
                 "Observations": len(paire),
+                "Spearman passé": round(avant.corr(method="spearman").iloc[0, 1], 4),
                 "Spearman absolu": round(paire.corr(method="spearman").iloc[0, 1], 4),
                 "Spearman relatif": round(relatif.corr(method="spearman").iloc[0, 1], 4),
                 "Score moyen": round(paire[code].mean(), 3),
@@ -376,7 +419,7 @@ def grille(table: pd.DataFrame, frais_pct: float = 0.10) -> pd.DataFrame:
             lambda g: g["r1"].mean() * len(g), include_groups=False
         ).mean()
 
-        for score in ["Global", "Tendance", "Momentum", "Volatilité", "Volume"]:
+        for score in SCORES:
             if score not in bloc.columns or bloc[score].notna().sum() < 50:
                 continue
             for seuil in [0.15, 0.30, 0.45]:
@@ -392,8 +435,10 @@ def grille(table: pd.DataFrame, frais_pct: float = 0.10) -> pd.DataFrame:
                             continue
                         gagnants = sum(g for _, g, _ in totaux)
                         gain = sum(r for _, _, r in totaux) / len(totaux)
+                        classe = SCORES[score][0]
                         lignes.append({
                             "Intervalle": intervalle,
+                            "Approche": classe.value,
                             "Score": score,
                             "Seuil min": seuil,
                             "Détention": duree,
@@ -418,7 +463,22 @@ def lecture() -> pd.DataFrame:
          "Comment lire": "LA feuille décisive. Corrélation au passé élevée et "
                          "corrélation au futur nulle : le score est un "
                          "thermomètre de ce qui vient de se passer, pas une "
-                         "prévision. C'est le cas ici (environ +0,80 contre 0,00)."},
+                         "prévision. C'est le cas des suiveurs (environ +0,80 "
+                         "contre 0,00)."},
+        {"Question": "L'approche anticipation change-t-elle quelque chose ?",
+         "Où regarder": "Passé vs futur, colonne Approche",
+         "Comment lire": "Deux lectures, dans cet ordre. 1) La corrélation au "
+                         "PASSÉ de l'anticipation doit être proche de zéro : "
+                         "sinon elle n'est qu'un suiveur déguisé et le reste ne "
+                         "vaut rien. 2) Seulement ensuite, sa corrélation au "
+                         "FUTUR relatif : c'est là, et nulle part ailleurs, que "
+                         "se verrait un vrai gain."},
+        {"Question": "Un indicateur d'anticipation en est-il vraiment un ?",
+         "Où regarder": "Par indicateur, colonne Spearman passé",
+         "Comment lire": "Contrôle de construction. Un indicateur étiqueté "
+                         "Anticipation dont le Spearman passé dépasse 0,40 en "
+                         "valeur absolue est mal classé : il redécrit le "
+                         "mouvement au lieu de chercher ce qui le retournerait."},
         {"Question": "Le score est-il inversé ?",
          "Où regarder": "Corrélations / Par tranche",
          "Comment lire": "Spearman nettement négatif, ou « Fortement positif » qui "
@@ -490,10 +550,12 @@ def main(symboles=None, intervalles=("1d", "4h", "1h"), periodes: int = 250):
         "Lecture": lecture(),
         "Passé vs futur": passe_vs_futur(table),
         "Corrélations": correlations(table),
-        "Par régime": par_regime(table),
-        "Par tranche (Global)": par_tranche(table, "Global"),
-        "Par tranche (Tendance)": par_tranche(table, "Tendance"),
-        "Par tranche (Momentum)": par_tranche(table, "Momentum"),
+        "Par régime": pd.concat(
+            [par_regime(table, score) for score in PRINCIPAUX], ignore_index=True
+        ),
+        "Par tranche (Suiveurs)": par_tranche(table, "Suiveurs"),
+        "Par tranche (Anticipation)": par_tranche(table, "Anticipation"),
+        "Par tranche (Anticip. Mom.)": par_tranche(table, "Anticip. Momentum"),
         "Par indicateur": par_indicateur(table),
         "Grille de simulation": resultats_grille,
         "Observations": table,

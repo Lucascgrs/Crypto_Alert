@@ -16,7 +16,7 @@ import sys
 import pandas as pd
 
 import suivi
-from indicateurs import catalogue
+from indicateurs import APPROCHE_DEFAUT, catalogue
 from moteur import AnalyseurMarche
 
 # La console Windows n'est pas toujours en UTF-8 : on force l'encodage pour
@@ -28,15 +28,23 @@ except (AttributeError, OSError):
 
 
 def afficher_catalogue():
-    """Liste les indicateurs disponibles (ce que l'UI proposera à cocher)."""
+    """
+    Liste les indicateurs disponibles (ce que l'UI proposera à cocher).
+
+    Groupés d'abord par APPROCHE : les deux jeux ne se mélangent jamais dans
+    un score, les afficher mêlés laisserait croire le contraire.
+    """
     print("=" * 78)
     print("INDICATEURS DISPONIBLES")
     print("=" * 78)
     fiche = catalogue()
-    for categorie, groupe in fiche.groupby("categorie", sort=False):
-        print(f"\n[{categorie}]")
-        for _, ligne in groupe.iterrows():
-            print(f"  {ligne['code']:<12} {ligne['nom']}")
+    for approche, jeu in fiche.groupby("approche", sort=False):
+        defaut = " (sélection par défaut)" if approche == APPROCHE_DEFAUT.value else ""
+        print(f"\n--- Approche {approche} : {len(jeu)} indicateurs{defaut} ---")
+        for categorie, groupe in jeu.groupby("categorie", sort=False):
+            print(f"\n[{categorie}]")
+            for _, ligne in groupe.iterrows():
+                print(f"  {ligne['code']:<16} {ligne['nom']}")
     print(f"\nTotal : {len(fiche)} indicateurs.\n")
 
 

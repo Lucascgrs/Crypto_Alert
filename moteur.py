@@ -17,7 +17,15 @@ import pandas as pd
 
 import config
 from donnees import SourceDonnees
-from indicateurs import Categorie, Indicateur, ResultatIndicateur, creer, qualifier_score
+from indicateurs import (
+    Approche,
+    Categorie,
+    Indicateur,
+    REGISTRE,
+    ResultatIndicateur,
+    creer,
+    qualifier_score,
+)
 
 
 # ===========================================================================
@@ -68,12 +76,41 @@ class ResultatCrypto:
     def synthese(self) -> str:
         return qualifier_score(self.score_global) if self.indicateurs_notes else "Non disponible"
 
-    def score_categorie(self, categorie: Categorie) -> float | None:
-        """Score moyen d'une famille d'indicateurs (None si aucune donnée)."""
+    def score_categorie(self, categorie: Categorie,
+                        approche: Approche | None = None) -> float | None:
+        """
+        Score moyen d'une famille d'indicateurs (None si aucune donnée).
+
+        `approche` restreint en plus à une approche. Utile dès qu'une analyse
+        porte les deux à la fois (c'est le cas du diagnostic) : le momentum
+        suiveur et le momentum d'anticipation se lisent en sens inverse, les
+        moyenner ensemble ne donnerait rien d'interprétable.
+        """
         concernes = [r for r in self.indicateurs_notes if r.categorie == categorie]
+        if approche is not None:
+            concernes = [r for r in concernes if self._approche(r) == approche]
         if not concernes:
             return None
         return sum(r.score for r in concernes) / len(concernes)
+
+    def score_approche(self, approche: Approche) -> float | None:
+        """Score moyen des indicateurs d'une approche (None si aucun n'a répondu)."""
+        concernes = [r for r in self.indicateurs_notes if self._approche(r) == approche]
+        if not concernes:
+            return None
+        return sum(r.score for r in concernes) / len(concernes)
+
+    @staticmethod
+    def _approche(resultat: ResultatIndicateur) -> Approche | None:
+        """
+        Approche d'un résultat, relue depuis le registre.
+
+        Le résultat ne transporte que le code de l'indicateur ; c'est la classe
+        qui sait à quelle approche il appartient. La relecture reste gratuite
+        (un accès de dictionnaire) et évite de dupliquer l'information.
+        """
+        classe = REGISTRE.get(resultat.code)
+        return None if classe is None else classe.approche
 
     @property
     def raison_indisponible(self) -> str:

@@ -5,7 +5,9 @@ Interface de bureau (customtkinter).
 
 Disposition :
   - barre du haut  : réglages (Top N, intervalle), analyse et alertes Discord ;
-  - panneau gauche : cases à cocher des 20 indicateurs, groupées par catégorie ;
+  - panneau gauche : l'interrupteur d'approche (suiveuse / anticipation) puis
+                     les cases à cocher des indicateurs de l'approche active,
+                     groupées par catégorie ;
   - centre         : tableau de synthèse — une ligne par crypto avec son score
                      global et ses quatre scores de famille. Volontairement
                      compact : le détail par indicateur s'obtient en cliquant ;
@@ -27,7 +29,14 @@ import presentation as pr
 import suivi
 from fenetre_alertes import FenetreAlertes
 from fenetre_suivi import FenetreSuivi, planifier
-from indicateurs import CODES_PAR_DEFAUT, Categorie, catalogue, codes_par_categorie
+from indicateurs import (
+    APPROCHE_DEFAUT,
+    Approche,
+    Categorie,
+    catalogue,
+    codes_par_approche,
+    codes_par_categorie,
+)
 from moteur import AnalyseurMarche
 
 ctk.set_appearance_mode("dark")
@@ -64,7 +73,8 @@ class ApplicationBureau(ctk.CTk):
 
         # État de l'application
         self.resultats = []
-        self.selection = {}          # code indicateur -> BooleanVar
+        self.selection = {}          # code indicateur -> BooleanVar (les deux approches)
+        self.approche = APPROCHE_DEFAUT
         self.analyse_en_cours = False
         self.envoyer_apres_analyse = False
         self.symbole_detaille = None
@@ -148,7 +158,25 @@ class ApplicationBureau(ctk.CTk):
         cadre.grid(row=1, column=0, sticky="nsw")
         cadre.grid_propagate(False)
 
-        ctk.CTkLabel(cadre, text="INDICATEURS", font=POLICE_SOUS_TITRE).pack(pady=(15, 5))
+        ctk.CTkLabel(cadre, text="INDICATEURS", font=POLICE_SOUS_TITRE).pack(pady=(15, 2))
+
+        # Interrupteur d'approche. Les deux jeux ne se cochent jamais ensemble :
+        # un Supertrend (« ça monte ») et un retour à la moyenne (« ça monte trop »)
+        # moyennés dans le même score s'annuleraient au lieu de se compléter.
+        self.bouton_approche = ctk.CTkSegmentedButton(
+            cadre,
+            values=[approche.value for approche in Approche],
+            font=POLICE_PETITE,
+            command=self._changer_approche,
+        )
+        self.bouton_approche.set(self.approche.value)
+        self.bouton_approche.pack(fill="x", padx=12, pady=(4, 2))
+
+        self.legende_approche = ctk.CTkLabel(
+            cadre, text="", font=POLICE_PETITE, text_color="#7c8695",
+            wraplength=225, justify="left",
+        )
+        self.legende_approche.pack(fill="x", padx=12, pady=(0, 6))
 
         boutons = ctk.CTkFrame(cadre, fg_color="transparent")
         boutons.pack(fill="x", padx=12, pady=(0, 8))
@@ -161,25 +189,54 @@ class ApplicationBureau(ctk.CTk):
             hover_color="#6b7280", command=lambda: self._basculer_tout(False),
         ).pack(side="left", expand=True, fill="x", padx=2)
 
-        liste = ctk.CTkScrollableFrame(cadre, fg_color="transparent")
-        liste.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        self.liste_indicateurs = ctk.CTkScrollableFrame(cadre, fg_color="transparent")
+        self.liste_indicateurs.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        self._remplir_indicateurs()
+
+    # Une phrase par approche, affichée sous l'interrupteur : sans elle, le choix
+    # ressemble à une préférence esthétique alors qu'il change la nature du score.
+    LEGENDES_APPROCHE = {
+        Approche.SUIVEUSE: "Transformations lissées du prix passé : décrivent "
+                           "très bien le mouvement en cours.",
+        Approche.ANTICIPATION: "Étirement, dérivée seconde, divergences, climax : "
+                               "cherchent ce qui pourrait le retourner.",
+    }
+
+    def _changer_approche(self, valeur: str):
+        """Bascule d'un jeu d'indicateurs à l'autre et reconstruit la liste."""
+        self.approche = Approche(valeur)
+        self._remplir_indicateurs()
+        self._etat(f"Approche « {valeur} » : relancez l'analyse.")
+
+    def _remplir_indicateurs(self):
+        """(Re)construit les cases à cocher de l'approche active."""
+        for enfant in self.liste_indicateurs.winfo_children():
+            enfant.destroy()
+
+        self.legende_approche.configure(text=self.LEGENDES_APPROCHE[self.approche])
 
         # Groupés par catégorie, dans l'ordre du registre : c'est celui qui parle
         # le plus à l'utilisateur.
-        fiches = catalogue().set_index("code")
+        fiches = catalogue(self.approche).set_index("code")
         for categorie in Categorie:
-            codes = codes_par_categorie(categorie)
+            codes = codes_par_categorie(categorie, self.approche)
             if not codes:
                 continue
             ctk.CTkLabel(
-                liste, text=categorie.value.upper(), font=POLICE_PETITE, text_color="#7c8695"
+                self.liste_indicateurs, text=categorie.value.upper(),
+                font=POLICE_PETITE, text_color="#7c8695",
             ).pack(anchor="w", pady=(10, 2))
 
             for code in codes:
-                variable = tk.BooleanVar(value=True)
-                self.selection[code] = variable
+                # Les cases survivent à un aller-retour entre les deux approches :
+                # on décoche trois indicateurs, on va voir l'autre jeu, on revient,
+                # et la sélection est toujours là. (Pas de `setdefault` : il
+                # créerait une variable Tk jetable à chaque reconstruction.)
+                if code not in self.selection:
+                    self.selection[code] = tk.BooleanVar(value=True)
+                variable = self.selection[code]
                 ctk.CTkCheckBox(
-                    liste, text=fiches.loc[code, "nom"], variable=variable,
+                    self.liste_indicateurs, text=fiches.loc[code, "nom"], variable=variable,
                     font=POLICE_PETITE, checkbox_width=18, checkbox_height=18,
                 ).pack(anchor="w", pady=1)
 
@@ -229,12 +286,15 @@ class ApplicationBureau(ctk.CTk):
     # SÉLECTION ET ANALYSE
     # =====================================================================
     def _basculer_tout(self, valeur: bool):
-        for variable in self.selection.values():
-            variable.set(valeur)
+        """Ne touche qu'à l'approche affichée : l'autre garde sa sélection."""
+        for code in codes_par_approche(self.approche):
+            self.selection[code].set(valeur)
 
     def _codes_selectionnes(self) -> list[str]:
-        """Codes cochés, dans l'ordre du registre pour un affichage stable."""
-        return [code for code in CODES_PAR_DEFAUT if self.selection[code].get()]
+        """Codes cochés de l'approche active, dans l'ordre du registre."""
+        return [
+            code for code in codes_par_approche(self.approche) if self.selection[code].get()
+        ]
 
     def _etat(self, message: str):
         self.etiquette_etat.configure(text=message)

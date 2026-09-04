@@ -159,6 +159,8 @@ class AtrIndicateur(Indicateur):
     code = "ATR"
     nom = "ATR (14)"
     categorie = Categorie.VOLATILITE
+    # Aucun de ses trois critères ne dit si le marché monte ou descend.
+    contextuel = True
     description = (
         "Volatilité moyenne exprimée en pourcentage du prix, située dans son "
         "propre historique (marché calme ou agité) et son sens d'évolution."

@@ -78,6 +78,35 @@ class Categorie(Enum):
     VOLUME = "Volume"
 
 
+class Approche(Enum):
+    """
+    Ce qu'un indicateur regarde : le mouvement déjà accompli, ou ce qui
+    pourrait le retourner.
+
+    Distinction orthogonale à `Categorie` (qui dit de QUOI on parle : tendance,
+    momentum, volatilité, volume). Ici on dit QUAND l'information apparaît.
+
+      SUIVEUSE     : moyennes, croisements, canaux, force de tendance. Ces
+                     indicateurs sont des transformations lissées du prix passé.
+                     Ils décrivent très bien ce qui vient d'arriver -- et c'est
+                     précisément leur limite : par construction, leur score est
+                     très corrélé au rendement des barres précédentes.
+
+      ANTICIPATION : indicateurs volontairement construits pour NE PAS être une
+                     fonction monotone du rendement passé -- étirement, dérivée
+                     seconde, divergences, forme des bougies, troisième moment,
+                     régime de volatilité. Ils cherchent les conditions d'un
+                     retournement plutôt que la confirmation du mouvement.
+
+    C'est une hypothèse de construction, pas une promesse de résultat :
+    `diagnostic.py` mesure les deux approches côte à côte (feuille
+    « Passé vs futur ») et c'est cette mesure qui tranche.
+    """
+
+    SUIVEUSE = "Suiveuse"
+    ANTICIPATION = "Anticipation"
+
+
 def qualifier_score(score: float | None) -> str:
     """Traduit un score de [-1, 1] en libellé lisible (cf. config.SEUILS_SYNTHESE)."""
     if score is None or (isinstance(score, float) and math.isnan(score)):
@@ -253,6 +282,10 @@ class Indicateur(ABC):
       code              : identifiant court et stable (sélection dans l'UI)
       nom               : libellé affiché
       categorie         : Categorie.TENDANCE / MOMENTUM / VOLATILITE / VOLUME
+      approche          : Approche.SUIVEUSE (défaut) ou Approche.ANTICIPATION
+      contextuel        : True si l'indicateur ne produit QUE des critères de
+                          contexte, donc jamais de score. Évite de proposer un
+                          score de famille qui vaudrait toujours « rien ».
       description       : une phrase expliquant ce que l'indicateur mesure
       periodes_min      : nombre de bougies minimum pour un calcul fiable
       PARAMETRES_DEFAUT : réglages surchargeables à l'instanciation
@@ -261,6 +294,8 @@ class Indicateur(ABC):
     code: str = ""
     nom: str = ""
     categorie: Categorie = Categorie.TENDANCE
+    approche: Approche = Approche.SUIVEUSE
+    contextuel: bool = False
     description: str = ""
     periodes_min: int = 50
     PARAMETRES_DEFAUT: dict = {}
@@ -354,6 +389,8 @@ class Indicateur(ABC):
             "code": self.code,
             "nom": self.nom,
             "categorie": self.categorie.value,
+            "approche": self.approche.value,
+            "contextuel": self.contextuel,
             "description": self.description,
             "periodes_min": self.periodes_min,
             "parametres": dict(self.parametres),

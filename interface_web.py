@@ -19,7 +19,15 @@ import notifications as notif
 import presentation as pr
 import simulation as mod_simulation
 import suivi
-from indicateurs import CODES_PAR_DEFAUT, Categorie, catalogue, codes_par_categorie
+from indicateurs import (
+    APPROCHE_DEFAUT,
+    REGISTRE,
+    Approche,
+    Categorie,
+    catalogue,
+    codes_par_approche,
+    codes_par_categorie,
+)
 from moteur import AnalyseurMarche
 
 st.set_page_config(
@@ -31,6 +39,16 @@ st.set_page_config(
 # ===========================================================================
 # BARRE LATÉRALE : LES RÉGLAGES
 # ===========================================================================
+# Une phrase par approche, affichée sous l'interrupteur : sans elle, le choix
+# ressemble à une préférence esthétique alors qu'il change la nature du score.
+LEGENDES_APPROCHE = {
+    Approche.SUIVEUSE: "Transformations lissées du prix passé : elles décrivent "
+                       "très bien le mouvement en cours.",
+    Approche.ANTICIPATION: "Étirement, dérivée seconde, divergences, climax de "
+                           "volume : elles cherchent ce qui pourrait le retourner.",
+}
+
+
 def barre_laterale() -> tuple[list[str], int, str]:
     """Affiche les réglages et renvoie (indicateurs cochés, nombre, intervalle)."""
     st.sidebar.title("Réglages")
@@ -42,20 +60,37 @@ def barre_laterale() -> tuple[list[str], int, str]:
     st.sidebar.divider()
     st.sidebar.subheader("Indicateurs")
 
+    # Interrupteur d'approche. Les deux jeux ne se cochent jamais ensemble : un
+    # Supertrend (« ça monte ») et un retour à la moyenne (« ça monte trop »)
+    # moyennés dans le même score s'annuleraient au lieu de se compléter.
+    approche = Approche(
+        st.sidebar.radio(
+            "Approche",
+            [a.value for a in Approche],
+            index=list(Approche).index(APPROCHE_DEFAUT),
+            horizontal=True,
+            key="approche",
+        )
+    )
+    st.sidebar.caption(LEGENDES_APPROCHE[approche])
+
+    codes_approche = codes_par_approche(approche)
+
     # Les boutons Tout / Rien agissent en préremplissant l'état des cases, qui
-    # est ensuite lu par les widgets eux-mêmes.
+    # est ensuite lu par les widgets eux-mêmes. Ils ne touchent qu'à l'approche
+    # affichée : l'autre garde sa sélection.
     colonne_tout, colonne_rien = st.sidebar.columns(2)
     if colonne_tout.button("Tout", width="stretch"):
-        for code in CODES_PAR_DEFAUT:
+        for code in codes_approche:
             st.session_state[f"case_{code}"] = True
     if colonne_rien.button("Rien", width="stretch"):
-        for code in CODES_PAR_DEFAUT:
+        for code in codes_approche:
             st.session_state[f"case_{code}"] = False
 
-    fiches = catalogue().set_index("code")
+    fiches = catalogue(approche).set_index("code")
     coches = []
     for categorie in Categorie:
-        codes = codes_par_categorie(categorie)
+        codes = codes_par_categorie(categorie, approche)
         if not codes:
             continue
         with st.sidebar.expander(f"{categorie.value} ({len(codes)})", expanded=True):
@@ -69,7 +104,9 @@ def barre_laterale() -> tuple[list[str], int, str]:
                     coches.append(code)
 
     st.sidebar.divider()
-    st.sidebar.caption(f"{len(coches)} indicateur(s) sélectionné(s) sur {len(CODES_PAR_DEFAUT)}.")
+    st.sidebar.caption(
+        f"{len(coches)} indicateur(s) sélectionné(s) sur {len(codes_approche)}."
+    )
     return coches, nombre, intervalle
 
 
@@ -391,7 +428,12 @@ def onglet_simulation():
         ligne = st.columns(4)
         mise = ligne[0].number_input("Mise par crypto ($)", 10.0, 1_000_000.0, 1000.0, step=100.0)
         libelle = ligne[1].selectbox("Intervalle", list(pr.INTERVALLES))
-        periodes = ligne[2].number_input("Périodes simulées", 20, 800, 150, step=10)
+        periodes = ligne[2].number_input(
+            "Périodes simulées", 20, 20_000, 150, step=10,
+            help="Nombre de bougies passées rejouées. Au-delà de 1000, "
+                 "l'historique est téléchargé en plusieurs appels (pagination "
+                 "Binance) : une très grande valeur prend plus de temps à charger.",
+        )
         frais = ligne[3].number_input(
             "Frais par transaction (%)", 0.0, 5.0, 0.10, step=0.05,
             help="Comptés à l'entrée et à la sortie. Sans eux, une stratégie qui "
@@ -399,10 +441,19 @@ def onglet_simulation():
         )
 
         st.markdown("**Signal d'entrée**")
-        ligne = st.columns(3)
-        type_score = ligne[0].selectbox("Score utilisé", mod_simulation.TYPES_SCORE)
-        sens = ligne[1].selectbox("Sens autorisés", mod_simulation.SENS_POSSIBLES)
-        seuils = ligne[2].slider(
+        ligne = st.columns(4)
+        # L'approche décide de QUELS indicateurs composent le score simulé : c'est
+        # la comparaison des deux qui rend la simulation intéressante.
+        approche_simu = ligne[0].selectbox(
+            "Approche", [a.value for a in Approche],
+            index=list(Approche).index(APPROCHE_DEFAUT),
+            help="Suiveuse : les 20 indicateurs d'origine. Anticipation : les 7 "
+                 "indicateurs construits pour ne pas se contenter de décrire le "
+                 "mouvement déjà accompli.",
+        )
+        type_score = ligne[1].selectbox("Score utilisé", mod_simulation.TYPES_SCORE)
+        sens = ligne[2].selectbox("Sens autorisés", mod_simulation.SENS_POSSIBLES)
+        seuils = ligne[3].slider(
             "Seuils sur |score|", 0.0, 1.0, (0.30, 1.0), step=0.05,
             help="Une position ne s'ouvre que si la valeur absolue du score tombe "
                  "dans cette plage.",
@@ -452,6 +503,7 @@ def onglet_simulation():
         mise=float(mise), intervalle=pr.INTERVALLES[libelle], periodes=int(periodes),
         duree_position=int(duree), symboles=symboles, type_score=type_score,
         seuil_min=seuils[0], seuil_max=seuils[1], sens=sens, frais_pct=float(frais),
+        codes=codes_par_approche(approche_simu),
         # 0 vaut « condition désactivée ».
         retournement=float(retournement) or None,
         objectif_pct=float(objectif) or None,
@@ -518,6 +570,7 @@ def onglet_simulation():
     trades = mod_simulation.Simulateur.tableau_trades(resultats)
     if not trades.empty:
         with st.expander(f"Détail des {len(trades)} allers-retours"):
+            st.caption("Entrée / Sortie en heure de Paris (FR).")
             apercu = trades[["Crypto", "Sens", "Score", "Entrée", "Sortie", "Motif",
                              "Rendement net %", "Capital après"]].head(40).copy()
             apercu["Entrée"] = apercu["Entrée"].dt.strftime("%d/%m/%y %H:%M")
@@ -569,7 +622,7 @@ def main():
 
     # On réaffiche avec les indicateurs réellement analysés, pas ceux cochés
     # depuis : l'utilisateur peut avoir modifié la sélection sans relancer.
-    codes_analyses = [c for c in st.session_state.get("codes", codes) if c in CODES_PAR_DEFAUT]
+    codes_analyses = [c for c in st.session_state.get("codes", codes) if c in REGISTRE]
     exploitables = [r for r in resultats if r.indicateurs_notes]
 
     resume = st.columns(3)

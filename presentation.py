@@ -10,6 +10,9 @@ côtés. Aucune de ces fonctions ne calcule quoi que ce soit de financier.
 from __future__ import annotations
 
 import math
+from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 from indicateurs import Signal
 
@@ -158,6 +161,38 @@ ABREVIATIONS_SYNTHESE = {
 
 def abreger(synthese: str) -> str:
     return ABREVIATIONS_SYNTHESE.get(synthese, "?")
+
+
+# ---------------------------------------------------------------------------
+# Fuseau horaire d'affichage
+# ---------------------------------------------------------------------------
+# Toutes les données de prix (Binance) et tous les horodatages internes
+# (Trade.entree/sortie, journal de suivi) sont en UTC, naîfs (sans tzinfo) :
+# c'est le format renvoyé par l'API, et le seul qui permette de comparer une
+# échéance à une bougie sans ambiguïté. Cette fonction n'intervient qu'à la
+# dernière étape, l'AFFICHAGE : convertir en heure de Paris ce qui va être lu.
+FUSEAU_AFFICHAGE = ZoneInfo("Europe/Paris")
+
+
+def heure_fr(valeur):
+    """
+    Convertit un horodatage UTC naïf en heure de Paris (gère l'heure d'été).
+
+    Accepte un datetime/Timestamp, une Series ou un DatetimeIndex ; les valeurs
+    manquantes (None, NaT) traversent sans erreur. Le résultat reste naïf : ni
+    Excel ni les widgets d'affichage n'ont besoin d'un fuseau, seule l'heure
+    montrée à l'écran doit être la bonne.
+    """
+    if isinstance(valeur, pd.DatetimeIndex):
+        return valeur.tz_localize("UTC").tz_convert(FUSEAU_AFFICHAGE).tz_localize(None)
+    if isinstance(valeur, pd.Series):
+        return valeur.dt.tz_localize("UTC").dt.tz_convert(FUSEAU_AFFICHAGE).dt.tz_localize(None)
+    if valeur is None or pd.isna(valeur):
+        return valeur
+    instant = pd.Timestamp(valeur)
+    if instant.tzinfo is None:
+        instant = instant.tz_localize("UTC")
+    return instant.tz_convert(FUSEAU_AFFICHAGE).tz_localize(None)
 
 
 # ---------------------------------------------------------------------------

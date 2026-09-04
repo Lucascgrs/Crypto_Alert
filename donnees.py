@@ -5,8 +5,11 @@ Deux besoins seulement :
   1. le classement des N cryptos les plus capitalisées  -> CoinGecko ;
   2. l'historique OHLCV de chacune                      -> Binance (repli Yahoo).
 
-Reprend l'approche de Crypto/GatherData.py en la simplifiant : ici on n'a
-besoin que des dernières centaines de bougies, donc pas de pagination.
+Reprend l'approche de Crypto/GatherData.py en la simplifiant.
+
+L'API Binance plafonne un appel à 1000 bougies : `_binance` pagine au-delà en
+enchainant les appels vers le passé (paramètre `endTime`), ce dont la simulation
+a besoin pour rejouer une stratégie sur plusieurs milliers de bougies.
 """
 
 from __future__ import annotations
@@ -188,27 +191,67 @@ class SourceDonnees:
         return df
 
     def _binance(self, symbole: str, intervalle: str, nb_bougies: int) -> pd.DataFrame | None:
-        """Chandeliers Binance. La limite de 1000 bougies par appel nous suffit."""
-        parametres = {
-            "symbol": f"{symbole}USDT",
-            "interval": intervalle,
-            "limit": min(nb_bougies, 1000),
-        }
-        try:
-            reponse = requests.get(
-                config.URL_BINANCE, params=parametres, timeout=config.TIMEOUT_REQUETE
-            )
-            if reponse.status_code != 200:  # paire inexistante le plus souvent
+        """
+        Chandeliers Binance, avec pagination au-delà de 1000 bougies.
+
+        Un appel plafonne à 1000 bougies (limite de l'API) : au-delà, on
+        enchâine les appels vers le PASSÉ via `endTime`, borné juste avant la
+        bougie la plus ancienne déjà reçue, jusqu'à réunir le nombre demandé
+        ou atteindre le début de la cotation (page renvoyée plus courte que
+        demandée, ou vide).
+        """
+        pages = []
+        restant = nb_bougies
+        avant_ms = None  # borne exclusive : ne redemander que du plus ancien
+
+        while restant > 0:
+            limite = min(restant, 1000)
+            parametres = {
+                "symbol": f"{symbole}USDT",
+                "interval": intervalle,
+                "limit": limite,
+            }
+            if avant_ms is not None:
+                parametres["endTime"] = avant_ms
+
+            try:
+                reponse = requests.get(
+                    config.URL_BINANCE, params=parametres, timeout=config.TIMEOUT_REQUETE
+                )
+            except requests.RequestException as e:
+                if pages:
+                    break   # on garde ce qui a déjà été récupéré
+                self._log(f"   {symbole} : Binance injoignable ({e})")
                 return None
+
+            if reponse.status_code != 200:  # paire inexistante le plus souvent
+                if pages:
+                    break
+                return None
+
             bougies = reponse.json()
             if not bougies:
-                return None
-        except requests.RequestException as e:
-            self._log(f"   {symbole} : Binance injoignable ({e})")
+                break   # début de la cotation atteint
+
+            pages.insert(0, bougies)
+            restant -= len(bougies)
+            avant_ms = bougies[0][0] - 1
+
+            if len(bougies) < limite:
+                break   # Binance a renvoyé moins que demandé : rien avant
+
+            if restant > 0:
+                # Anti rate-limit entre deux pages : sans lui, une simulation
+                # sur plusieurs milliers de bougies enchainerait les appels
+                # sans pause et risquerait de se faire limiter (code 429).
+                time.sleep(config.DELAI_ENTRE_REQUETES)
+
+        if not pages:
             return None
 
+        brutes = [ligne for page in pages for ligne in page]
         df = pd.DataFrame(
-            bougies,
+            brutes,
             columns=[
                 "ouverture", "Open", "High", "Low", "Close", "Volume",
                 "fermeture", "volume_quote", "trades",

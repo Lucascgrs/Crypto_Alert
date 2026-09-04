@@ -1,11 +1,16 @@
 # CryptoDashboard — indicateurs techniques traduits en critères qualitatifs
 
-Récupère les **N cryptos les plus capitalisées**, calcule **20 indicateurs
+Récupère les **N cryptos les plus capitalisées**, calcule des **indicateurs
 techniques** sur chacune, et traduit chaque valeur numérique en **critère
 qualitatif** lisible, associé à un signal positif / neutre / négatif.
 
 Approche 100 % algorithmique (aucun apprentissage automatique) : chaque critère
 est une règle explicite, lisible et modifiable dans le code.
+
+Deux jeux d'indicateurs cohabitent, sélectionnables par un interrupteur dans les
+deux interfaces : les **20 suiveurs** historiques, et les **7 indicateurs
+d'anticipation** ajoutés ensuite. Voir [Les deux approches](#les-deux-approches)
+— et surtout ce que le diagnostic en dit, qui n'est pas flatteur.
 
 > Exemple de sortie plutôt que de chiffres bruts :
 > ```
@@ -131,11 +136,12 @@ CryptoDashboard/
 └── indicateurs/
     ├── base.py          Signal, Critere, Indicateur + outils de traduction
     ├── outils.py        Fonctions numériques partagées (moyennes, ATR, rangs...)
-    ├── tendance.py      7 indicateurs
-    ├── momentum.py      5 indicateurs
-    ├── volatilite.py    4 indicateurs
-    ├── volume.py        4 indicateurs
-    └── registre.py      Catalogue et instanciation de la sélection
+    ├── tendance.py      7 indicateurs suiveurs
+    ├── momentum.py      5 indicateurs suiveurs
+    ├── volatilite.py    4 indicateurs suiveurs
+    ├── volume.py        4 indicateurs suiveurs
+    ├── anticipation.py  7 indicateurs de l'approche « anticipation »
+    └── registre.py      Catalogue, approches et instanciation de la sélection
 ```
 
 ### Le contrat d'un indicateur
@@ -153,14 +159,18 @@ tout en gardant l'interprétation isolée et facile à ajuster.
 ### Ajouter un indicateur
 
 1. Écrire la classe dans le module de sa catégorie (elle hérite de `Indicateur`).
-2. L'ajouter à la liste `CLASSES` dans `indicateurs/registre.py`.
+2. L'ajouter à `CLASSES_SUIVEUSES` ou `CLASSES_ANTICIPATION` dans
+   `indicateurs/registre.py`, selon son approche.
 
 Rien d'autre à toucher : le catalogue, la sélection et les tableaux se mettent à
 jour automatiquement.
 
 ---
 
-## Les 20 indicateurs et leurs 56 critères
+## Les 20 indicateurs suiveurs et leurs 56 critères
+
+C'est la sélection par défaut. Pour les 7 autres, voir
+[Les deux approches](#les-deux-approches).
 
 `ctx` = critère de **contexte** : il décrit l'état du marché (volatilité, force
 de tendance, niveau de volume) sans dire s'il est haussier ou baissier. Ces
@@ -208,6 +218,150 @@ critères sont affichés mais exclus du calcul de score.
 
 ---
 
+## Les deux approches
+
+### D'où vient la question
+
+Le diagnostic (`python diagnostic.py`) a mesuré sur 9 000 barres que le score
+des 20 indicateurs suiveurs est corrélé à **+0,84** avec le rendement des 12
+bougies **précédentes**, et à **environ 0,00** avec celui des 12 bougies
+**suivantes**.
+
+Ce n'est pas un défaut de réglage. Une moyenne mobile, un MACD, un Supertrend
+sont par construction des transformations lissées du prix passé : ils décrivent
+très bien ce qui vient d'arriver, et c'est exactement pour cela qu'ils ne
+l'anticipent pas.
+
+D'où un second jeu d'indicateurs, sélectionnés sur une règle explicite :
+
+> un indicateur entre dans l'approche « anticipation » seulement si son score
+> **n'est pas une fonction monotone du rendement des dernières barres**.
+
+Chacun regarde donc autre chose que le premier moment du prix : l'étirement, la
+dérivée seconde, le désaccord prix / oscillateurs, la forme des bougies, le
+troisième moment des rendements, le régime de volatilité.
+
+### Anticipation — 7 indicateurs, 14 critères
+
+| Code | Indicateur | Catégorie | Critères | Ce qu'il regarde |
+|---|---|---|---|---|
+| `RETOUR_MOYENNE` | Retour à la moyenne (Z-score 20) | Momentum | 2 | distance du prix à sa moyenne en écarts-types, et vitesse à laquelle l'écart se creuse — lus à contre-courant |
+| `ESSOUFFLEMENT` | Essoufflement (dérivée seconde) | Momentum | 2 | la jambe en cours comparée à la précédente (normalisée par l'ATR), et la longueur de la série de bougies de même sens |
+| `DIVERGENCES` | Divergences multiples | Momentum | 2 | désaccord prix / RSI, MACD et OBV, sur 20 puis 40 bougies. Trois oscillateurs d'accord valent bien mieux qu'un seul |
+| `ASYMETRIE` | Asymétrie des rendements (40) | Volatilité | 2 | skewness des rendements, et part du mouvement portée par la plus grosse bougie de la fenêtre |
+| `EPUISEMENT` | Épuisement (climax de volume) | Volume | 2 | volume record sur grande amplitude dont la clôture **contredit** le mouvement (capitulation, distribution) ; mèches de rejet |
+| `COMPRESSION` | Compression de volatilité | Volatilité | 2 ctx | largeur des bandes dans son propre historique. Dit **quand**, jamais **dans quel sens** |
+| `EFFICIENCE` | Efficience du mouvement | Tendance | 2 ctx | ratio de Kaufman et autocorrélation des rendements : dit laquelle des deux approches est dans son élément |
+
+Les deux derniers sont **purement contextuels** : ils n'entrent dans aucun score.
+`EFFICIENCE` est le méta-indicateur du tableau de bord — un marché au chemin
+efficient et aux rendements persistants est le terrain des suiveurs, un marché
+haché aux rendements qui se contredisent est celui de l'anticipation.
+
+### L'interrupteur
+
+- **Bureau** : bouton segmenté en haut du panneau de gauche.
+- **Web** : boutons radio « Approche » dans la barre latérale.
+- **Simulation** : menu « Approche » dans la section *Signal d'entrée*, pour
+  rejouer la même stratégie avec l'un puis l'autre jeu.
+
+Les deux sélections sont indépendantes : décocher trois indicateurs d'un côté,
+aller voir l'autre, revenir — la sélection est toujours là. Les boutons
+*Tout* / *Rien* ne touchent qu'à l'approche affichée.
+
+À savoir : côté anticipation, la catégorie **Tendance** ne contient que
+`EFFICIENCE`, qui est contextuel. Le score de famille « Tendance » est donc vide
+pour cette approche — la simulation le refuse explicitement, et la courbe
+d'évolution correspondante reste plate. Ce n'est pas un bug : il n'y a pas de
+tendance à mesurer dans un jeu d'indicateurs qui ne suit pas la tendance.
+
+### Pourquoi les deux ne se mélangent jamais
+
+Un Supertrend dit « ça monte » ; un retour à la moyenne dit « ça monte trop ».
+Moyennés dans le même score, ils ne se complètent pas : ils s'annulent. Le
+résultat serait un zéro permanent, pas une synthèse. D'où un interrupteur et non
+des cases à cocher communes.
+
+Conséquence de la même logique, l'échelle de pondération diffère : `momentum.py`
+s'interdit les signaux `±2` sur ses lectures contrariennes, pour qu'un excès de
+RSI n'annule pas les critères de tendance du même indicateur. Dans
+`anticipation.py`, il n'y a rien à annuler — tous les critères sont de même
+nature — et brider l'échelle plafonnerait le score de l'approche à 0,5 en valeur
+absolue : « Fortement positif » deviendrait inatteignable et les seuils de
+simulation ne voudraient plus rien dire.
+
+### Ce que la mesure en dit — honnêtement
+
+`python diagnostic.py` mesure les deux approches sur exactement les mêmes barres :
+12 cryptos × 3 intervalles × 250 barres = **9 000 observations**.
+
+**Premier contrôle : la règle de sélection est-elle respectée ?** C'est la
+colonne *Spearman passé* de la feuille « Par indicateur », moyennée sur les trois
+intervalles.
+
+| Suiveurs | passé | | Anticipation | passé |
+|---|---|---|---|---|
+| `STOCH` (le moins lié) | +0,23 | | `DIVERGENCES` | **-0,05** |
+| `MM` | +0,50 | | `ESSOUFFLEMENT` | **+0,15** |
+| `MACD` | +0,74 | | `ASYMETRIE` | **-0,17** |
+| moyenne des 19 | **+0,53** | | `EPUISEMENT` | **-0,17** |
+| | | | `RETOUR_MOYENNE` | -0,61 |
+
+Quatre des cinq tiennent dans une bande de ±0,17 : ils ne redécrivent pas le
+mouvement, contrairement à tous les suiveurs. `RETOUR_MOYENNE` est l'exception
+assumée — un Z-score, c'est le rendement récent au signe près, il ne pouvait pas
+en être autrement.
+
+> Ce contrôle a servi immédiatement : dans sa première version, `ESSOUFFLEMENT`
+> notait aussi l'accélération (« hausse qui accélère » = positif) et affichait
+> **+0,34** au passé. C'était un suiveur de tendance déguisé. Seule la
+> décélération porte désormais un signal, et la corrélation est tombée à +0,15.
+
+**Second contrôle : ça rapporte quelque chose ?** C'est la corrélation au
+rendement futur **relatif** (écart à la moyenne des cryptos au même instant — la
+seule qui ne récompense pas le fait de suivre le marché).
+
+| Horizon | 1d suiv. | 1d antic. | 4h suiv. | 4h antic. | 1h suiv. | 1h antic. |
+|---|---|---|---|---|---|---|
+| 6 bougies | -0,003 | +0,048 | **+0,056** | -0,010 | -0,021 | +0,010 |
+| 12 bougies | 0,000 | +0,082 | **+0,085** | -0,024 | -0,002 | +0,007 |
+| 24 bougies | -0,006 | **+0,099** | +0,055 | -0,007 | +0,042 | -0,032 |
+
+**Chaque intervalle a un gagnant différent.** L'anticipation domine en 1d (et de
+façon régulière : +0,027 → +0,099 quand l'horizon s'allonge), les suiveurs
+dominent en 4h, personne ne gagne en 1h. C'est la signature du **bruit**, pas
+d'un effet. Sur des barres qui se recouvrent, 3 000 observations valent quelques
+dizaines d'observations indépendantes : rien ici n'atteint le seuil de la preuve.
+
+**Le seul point qui mérite qu'on y revienne** : `ASYMETRIE` est le meilleur des
+**27** indicateurs sur cette colonne, à **+0,053** de corrélation relative — plus
+du double du meilleur suiveur (`AROON`, +0,022) — tout en étant orthogonal au
+passé (-0,17). C'est le troisième moment des rendements : quelque chose que
+**aucun** des 20 indicateurs d'origine ne regardait.
+
+**Ce que l'anticipation change vraiment**, en revanche, est mesurable et net :
+
+- elle produit **5 fois moins de signaux forts** (132 contre 420 en 1d au-dessus
+  de 0,30) et déclenche **2 à 3 fois moins de trades** — ce qui, vu le poids des
+  frais, n'est pas rien ;
+- elle est **beaucoup moins directionnelle**. À réglages identiques et sens
+  identique, l'achat rapporte -4,9 % en 1d (marché à -44,7 %) contre -18,2 % aux
+  suiveurs, mais seulement +3,2 % en 4h (marché à +25,0 %) contre +13,8 %.
+
+Autrement dit : elle amortit dans les deux sens. C'est un **bêta plus faible**,
+pas davantage d'information. Utile pour perdre moins, pas pour gagner plus.
+
+### En résumé
+
+L'approche anticipation fait ce pour quoi elle a été construite : elle ne
+redécrit pas le passé. Elle **ne prédit pas l'avenir pour autant**. Aucun
+réglage ne devrait être choisi sur les chiffres ci-dessus : ils viennent d'une
+seule fenêtre de 250 barres, et les choisir reviendrait à épouser le hasard de
+cette période. Relancez `diagnostic.py` sur une autre fenêtre avant de croire
+quoi que ce soit.
+
+---
+
 ## Conventions de lecture
 
 ### Les 5 niveaux de signal
@@ -229,8 +383,11 @@ Les critères de contexte s'affichent avec `·` et ne sont jamais comptés.
 - **Score d'une crypto** = moyenne des scores d'**indicateurs** (et non de
   critères). Sans cela, Ichimoku et ses 5 critères pèserait deux fois et demie
   plus lourd que le stochastique et ses 2, sans justification.
-- Les indicateurs purement contextuels (`ATR`) sont exclus de ces moyennes :
-  leur score étant toujours nul, ils tireraient tous les scores vers le neutre.
+- Les indicateurs purement contextuels (`ATR`, `COMPRESSION`, `EFFICIENCE`) sont
+  exclus de ces moyennes : leur score étant toujours nul, ils tireraient tous les
+  scores vers le neutre. Ils portent l'attribut de classe `contextuel = True`, ce
+  qui permet à la simulation de refuser un score de famille qui ne contiendrait
+  qu'eux, plutôt que de tourner à vide en annonçant zéro trade.
 - La traduction score → libellé (« Positif », « Fortement négatif »...) se règle
   dans `config.SEUILS_SYNTHESE`.
 
@@ -264,7 +421,7 @@ valeur du projet est dans le détail des critères, pas dans le chiffre agrégé
 | Besoin | Source | Remarque |
 |---|---|---|
 | Classement par capitalisation | CoinGecko `/coins/markets` | stablecoins exclus par défaut |
-| Historique OHLCV | Binance `/api/v3/klines` | 1000 bougies max par appel, largement suffisant |
+| Historique OHLCV | Binance `/api/v3/klines` | 1000 bougies max par appel ; `SourceDonnees._binance` pagine au-delà pour la simulation |
 | Repli OHLCV | Yahoo Finance (`yfinance`) | pour les cryptos sans paire USDT |
 
 Un cache disque (`cache/`, 15 min par défaut) évite de re-télécharger 20
@@ -578,8 +735,9 @@ capital final sans valoir la même chose.
 |---|---|
 | **Mise par crypto** | capital de départ, en dollars |
 | **Intervalle** | taille des bougies (`1d` … `1m`) |
-| **Périodes simulées** | nombre de barres passées rejouées |
-| **Score utilisé** | `Global`, `Tendance`, `Momentum`, `Volatilité` ou `Volume` |
+| **Périodes simulées** | nombre de barres passées rejouées — aucun plafond : au-delà de 1000, l'historique est téléchargé en plusieurs appels paginés |
+| **Approche** | `Suiveuse` (20 indicateurs) ou `Anticipation` (7) — décide de quels indicateurs composent le score simulé |
+| **Score utilisé** | `Global`, `Tendance`, `Momentum`, `Volatilité` ou `Volume`. Côté anticipation, `Tendance` ne contient qu'un indicateur contextuel et est donc refusé |
 | **Sens autorisés** | croissant (achat), décroissant (vente à découvert), ou les deux |
 | **Seuils min / max** | plage sur la **valeur absolue** du score ; hors de cette plage, aucune position |
 | **Durée maximale de détention** | en bougies ; referme ce qui n'a pas été coupé avant |
@@ -593,6 +751,25 @@ Les frais ne sont pas un détail : sans eux, une stratégie qui multiplie les
 allers-retours paraît toujours rentable. C'est le biais le plus courant d'un
 backtest naïf. Sur un exemple à 50 allers-retours, les passer de 0 à 0,10 %
 coûte environ 4 points de rendement.
+
+#### Fuseau horaire
+
+Toutes les données de prix (bougies Binance) et tous les horodatages internes
+sont en **UTC**. C'est nécessaire : comparer une échéance à une bougie n'a de
+sens que si les deux parlent le même référentiel, quel que soit le fuseau de la
+machine qui exécute le code.
+
+L'affichage, lui, convertit toujours en **heure de Paris** (gère l'heure
+d'été) :
+
+- les colonnes **Entrée** / **Sortie** du détail des trades ;
+- l'axe des deux graphiques (étiquetté « Heure (FR) ») — courbe de capital et
+  évolution des scores ;
+- l'onglet **Évolution** de `evolution()`.
+
+Seul le classeur `suivi_scores.xlsx` (onglets *Relevés*, *Vérifications*,
+*Évolution*) garde l'UTC brut — il porte le suffixe **(UTC)** dans ses
+en-têtes de colonne pour que ce soit dit, pas deviné.
 
 #### Lire le résultat
 
@@ -631,8 +808,13 @@ chaque barre en tronquant : cinq fois plus rapide qu'un recalcul complet, sans
 qu'aucune donnée future ne puisse remonter dans le passé.
 
 Un test (`analyser_serie` vs `analyser` sur série tronquée) vérifie que les deux
-chemins donnent **exactement** les mêmes critères, sur les 20 indicateurs et des
-dizaines de positions.
+chemins donnent **exactement** les mêmes critères, sur les 27 indicateurs des deux
+approches et des dizaines de positions.
+
+Le cas délicat est l'OBV de `DIVERGENCES` : c'est un cumul depuis le début de la
+série, donc une série tronquée le décale d'une constante. La détection de
+divergence ne compare que des extrêmes entre eux, un décalage constant ne change
+donc rien — et le test le confirme.
 
 Compter environ **4 secondes par crypto** pour 250 périodes et 20 indicateurs.
 La simulation tourne dans un thread : l'interface reste utilisable.

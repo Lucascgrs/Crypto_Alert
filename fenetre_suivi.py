@@ -32,6 +32,7 @@ import presentation as pr
 import simulation as mod_simulation
 import suivi as mod_suivi
 from donnees import SourceDonnees
+from indicateurs import APPROCHE_DEFAUT, Approche, codes_par_approche
 
 def planifier(widget, rappel, *arguments):
     """
@@ -326,6 +327,12 @@ class FenetreSuivi(ctk.CTkToplevel):
         ctk.CTkLabel(reglages, text="SIGNAL D'ENTRÉE", font=POLICE_SOUS_TITRE).pack(
             fill="x", pady=(14, 0)
         )
+        # L'approche décide de QUELS indicateurs composent le score simulé. Sans
+        # ce choix ici, la simulation ne saurait tester que les suiveurs, alors
+        # que c'est justement la comparaison des deux qui est intéressante.
+        self.champs_simu["approche"] = menu(
+            "Approche", [approche.value for approche in Approche], APPROCHE_DEFAUT.value
+        )
         self.champs_simu["type_score"] = menu("Score utilisé", mod_simulation.TYPES_SCORE, "Global")
         self.champs_simu["sens"] = menu(
             "Sens autorisés", mod_simulation.SENS_POSSIBLES, mod_simulation.SENS_LES_DEUX
@@ -498,7 +505,7 @@ class FenetreSuivi(ctk.CTkToplevel):
             seuil_min=round(self.curseur_min.get(), 2),
             seuil_max=round(self.curseur_max.get(), 2),
             sens=self.champs_simu["sens"].get(),
-            codes=None,
+            codes=codes_par_approche(self.champs_simu["approche"].get()),
             frais_pct=max(nombre("frais", 0.10), 0.0),
             retournement=optionnel("retournement"),
             objectif_pct=optionnel("objectif"),
@@ -649,7 +656,9 @@ class FenetreSuivi(ctk.CTkToplevel):
             return
 
         ctk.CTkLabel(
-            self.zone_simu, text=f"DERNIERS ALLERS-RETOURS ({len(trades)} au total)",
+            self.zone_simu,
+            text=f"DERNIERS ALLERS-RETOURS ({len(trades)} au total) — "
+                 "Entrée / Sortie en heure de Paris (FR)",
             font=POLICE_PETITE, text_color="#7c8695", anchor="w",
         ).pack(fill="x", pady=(14, 4))
 

@@ -153,9 +153,12 @@ def figure_capital(table, attribution=None, mode: str = "sombre",
     )
     axes.set_ylabel("Gain / perte (%)", color=encre["secondaire"], fontsize=10)
 
+    # L'axe reçoit déjà de l'heure de Paris (Simulateur.courbes convertit
+    # avant de renvoyer) : l'étiquette le dit, pour ne jamais laisser deviner.
     localisateur = mdates.AutoDateLocator(minticks=3, maxticks=8)
     axes.xaxis.set_major_locator(localisateur)
     axes.xaxis.set_major_formatter(mdates.ConciseDateFormatter(localisateur))
+    axes.set_xlabel("Heure (FR)", color=encre["secondaire"], fontsize=9)
     _depouiller(axes, encre)
 
     if len(colonnes) >= 2:
@@ -240,10 +243,13 @@ def _axes(axes, table, encre, type_score: str, intervalle: str):
     axes.set_yticks([-1, -0.5, 0, 0.5, 1])
     axes.set_ylabel("Score", color=encre["secondaire"], fontsize=10)
 
-    # Graduations de temps adaptées à l'amplitude réelle des relevés.
+    # Graduations de temps adaptées à l'amplitude réelle des relevés. L'axe
+    # reçoit déjà de l'heure de Paris (JournalSuivi.evolution convertit avant
+    # de renvoyer) : l'étiquette le dit, pour ne jamais laisser deviner.
     localisateur = mdates.AutoDateLocator(minticks=3, maxticks=8)
     axes.xaxis.set_major_locator(localisateur)
     axes.xaxis.set_major_formatter(mdates.ConciseDateFormatter(localisateur))
+    axes.set_xlabel("Heure (FR)", color=encre["secondaire"], fontsize=9)
 
     _depouiller(axes, encre)
 
